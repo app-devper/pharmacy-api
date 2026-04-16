@@ -35,7 +35,7 @@ func main() {
 	ah := handlers.NewStockAdjustmentHandler(database)
 	reth := handlers.NewReturnHandler(database)
 
-	r := routes.Setup(dh, lh, ch, sh, rh, kh, eh, ih, suph, ah, reth, cfg.FrontendOrigin, cfg.SecretKey)
+	r := routes.Setup(dh, lh, ch, sh, rh, kh, eh, ih, suph, ah, reth, cfg.SecretKey)
 
 	addr := fmt.Sprintf(":%s", cfg.Port)
 	log.Printf("Server running on http://localhost%s", addr)
