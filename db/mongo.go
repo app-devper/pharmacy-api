@@ -21,7 +21,8 @@ func Connect(uri, dbName string) *MongoDB {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	client, err := mongo.Connect(options.Client().ApplyURI(uri))
+	bsonOpts := &options.BSONOptions{ObjectIDAsHexString: true}
+	client, err := mongo.Connect(options.Client().ApplyURI(uri).SetBSONOptions(bsonOpts))
 	if err != nil {
 		log.Fatalf("MongoDB connect error: %v", err)
 	}
