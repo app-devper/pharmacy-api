@@ -75,6 +75,7 @@ func Setup(
 
 			// Drug management
 			r.Post("/drugs", dh.Add)
+			r.Post("/drugs/bulk", dh.BulkImport)
 			r.Put("/drugs/{id}", dh.Update)
 			r.Post("/drugs/{id}/adjustments", ah.Create)
 			r.Get("/drugs/{id}/adjustments", ah.List)

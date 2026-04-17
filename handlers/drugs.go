@@ -172,6 +172,94 @@ func (h *DrugHandler) Update(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]bool{"ok": true})
 }
 
+// BulkImportRowError describes a single failed row in a bulk import.
+type BulkImportRowError struct {
+	Row     int    `json:"row"`
+	Name    string `json:"name"`
+	Message string `json:"message"`
+}
+
+// BulkImportResult is the response for POST /drugs/bulk.
+type BulkImportResult struct {
+	Imported int                  `json:"imported"`
+	Errors   []BulkImportRowError `json:"errors"`
+}
+
+// BulkImport accepts a JSON array of DrugInput, inserts each one individually,
+// and returns a per-row error report rather than failing the whole batch.
+// POST /api/drugs/bulk  (ADMIN+)
+func (h *DrugHandler) BulkImport(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Drugs []models.DrugInput `json:"drugs"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		jsonError(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	if len(input.Drugs) == 0 {
+		jsonError(w, "drugs is required", http.StatusBadRequest)
+		return
+	}
+	if len(input.Drugs) > 1000 {
+		jsonError(w, "ไม่เกิน 1,000 รายการต่อครั้ง", http.StatusBadRequest)
+		return
+	}
+
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
+
+	result := BulkImportResult{Errors: []BulkImportRowError{}}
+	for i, inp := range input.Drugs {
+		row := i + 2 // row 1 = header in the Excel sheet
+		if inp.Name == "" {
+			result.Errors = append(result.Errors, BulkImportRowError{Row: row, Name: "-", Message: "ชื่อยาห้ามว่าง"})
+			continue
+		}
+		if inp.Type == "" {
+			inp.Type = "ยาสามัญ"
+		}
+		if inp.Unit == "" {
+			inp.Unit = "ชิ้น"
+		}
+		if inp.ReportTypes == nil {
+			inp.ReportTypes = []string{}
+		}
+		inp.Barcode = strings.TrimSpace(inp.Barcode)
+
+		drug := models.Drug{
+			Name:        inp.Name,
+			GenericName: inp.GenericName,
+			Type:        inp.Type,
+			Strength:    inp.Strength,
+			Barcode:     inp.Barcode,
+			SellPrice:   inp.SellPrice,
+			CostPrice:   inp.CostPrice,
+			Stock:       inp.Stock,
+			MinStock:    inp.MinStock,
+			RegNo:       inp.RegNo,
+			Unit:        inp.Unit,
+			ReportTypes: inp.ReportTypes,
+			CreatedAt:   time.Now(),
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		_, err := mdb.Drugs().InsertOne(ctx, drug)
+		cancel()
+		if err != nil {
+			msg := "บันทึกไม่สำเร็จ"
+			if isMongoDuplicate(err) {
+				msg = "บาร์โค้ดนี้มีอยู่ในระบบแล้ว"
+			}
+			result.Errors = append(result.Errors, BulkImportRowError{Row: row, Name: inp.Name, Message: msg})
+			continue
+		}
+		result.Imported++
+	}
+	jsonOK(w, result)
+}
+
 // LowStock returns drugs where min_stock > 0 AND stock <= min_stock, sorted by stock ASC.
 // GET /api/drugs/low-stock
 func (h *DrugHandler) LowStock(w http.ResponseWriter, r *http.Request) {
