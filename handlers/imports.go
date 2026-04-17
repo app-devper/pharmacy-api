@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
@@ -19,6 +21,13 @@ import (
 type ImportHandler struct{ db *db.MongoDB }
 
 func NewImportHandler(d *db.MongoDB) *ImportHandler { return &ImportHandler{db: d} }
+
+type importLogEntry struct {
+	DocNo     string
+	LotNumber string
+	DrugName  string
+	Qty       int
+}
 
 // List returns all purchase orders (summary only, items excluded).
 func (h *ImportHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -109,7 +118,11 @@ func (h *ImportHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	items, totalCost := h.buildItems(ctx, input.Items)
+	items, totalCost, err := h.buildItems(ctx, input.Items)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	po := models.PurchaseOrder{
 		DocNo:       docNo,
@@ -169,7 +182,11 @@ func (h *ImportHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	items, totalCost := h.buildItems(ctx, input.Items)
+	items, totalCost, err := h.buildItems(ctx, input.Items)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	_, err = h.db.PurchaseOrders().UpdateOne(ctx, bson.M{"_id": oid},
 		bson.M{"$set": bson.M{
@@ -239,74 +256,97 @@ func (h *ImportHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Process each item
-	now := time.Now()
-	receiveDate := po.ReceiveDate.Format("2006-01-02")
+	var logEntries []importLogEntry
+	if err := h.db.WithTransaction(ctx, func(txCtx context.Context) error {
+		now := time.Now()
+		receiveDate := po.ReceiveDate.Format("2006-01-02")
+		attemptLogs := make([]importLogEntry, 0, len(po.Items))
 
-	for _, item := range po.Items {
-		expiry, _ := time.Parse("2006-01-02", item.ExpiryDate)
-		costPrice := item.CostPrice
+		for _, item := range po.Items {
+			expiry, _ := time.Parse("2006-01-02", item.ExpiryDate)
+			costPrice := item.CostPrice
 
-		// 1. Create DrugLot
-		lot := models.DrugLot{
-			DrugID:     item.DrugID,
-			LotNumber:  item.LotNumber,
-			ExpiryDate: expiry,
-			ImportDate: po.ReceiveDate,
-			CostPrice:  &costPrice,
-			SellPrice:  item.SellPrice,
-			Quantity:   item.Qty,
-			Remaining:  item.Qty,
-			CreatedAt:  now,
+			lot := models.DrugLot{
+				DrugID:     item.DrugID,
+				LotNumber:  item.LotNumber,
+				ExpiryDate: expiry,
+				ImportDate: po.ReceiveDate,
+				CostPrice:  &costPrice,
+				SellPrice:  item.SellPrice,
+				Quantity:   item.Qty,
+				Remaining:  item.Qty,
+				CreatedAt:  now,
+			}
+			if _, err := h.db.DrugLots().InsertOne(txCtx, lot); err != nil {
+				return fmt.Errorf("lot insert failed for %s: %w", item.DrugName, err)
+			}
+
+			stockRes, err := h.db.Drugs().UpdateOne(txCtx,
+				bson.M{"_id": item.DrugID},
+				bson.M{"$inc": bson.M{"stock": item.Qty}},
+			)
+			if err != nil {
+				return fmt.Errorf("stock update failed: %w", err)
+			}
+			if stockRes.MatchedCount == 0 {
+				return fmt.Errorf("drug not found for %s", item.DrugName)
+			}
+
+			var drug models.Drug
+			if err := h.db.Drugs().FindOne(txCtx, bson.M{"_id": item.DrugID}).Decode(&drug); err != nil {
+				return fmt.Errorf("drug lookup failed for %s: %w", item.DrugName, err)
+			}
+
+			ky9 := models.Ky9{
+				Date:         receiveDate,
+				DrugName:     item.DrugName,
+				RegNo:        drug.RegNo,
+				Unit:         drug.Unit,
+				Qty:          item.Qty,
+				PricePerUnit: item.CostPrice,
+				TotalValue:   float64(item.Qty) * item.CostPrice,
+				Seller:       po.Supplier,
+				InvoiceNo:    po.InvoiceNo,
+				CreatedAt:    now,
+			}
+			if _, err := h.db.Ky9().InsertOne(txCtx, ky9); err != nil {
+				return fmt.Errorf("ky9 insert failed for %s: %w", item.DrugName, err)
+			}
+
+			attemptLogs = append(attemptLogs, importLogEntry{
+				DocNo:     po.DocNo,
+				LotNumber: item.LotNumber,
+				DrugName:  item.DrugName,
+				Qty:       item.Qty,
+			})
 		}
-		if _, err := h.db.DrugLots().InsertOne(ctx, lot); err != nil {
-			jsonError(w, "lot insert failed for "+item.DrugName+": "+err.Error(), http.StatusInternalServerError)
+
+		updateRes, err := h.db.PurchaseOrders().UpdateOne(txCtx,
+			bson.M{"_id": oid, "status": "draft"},
+			bson.M{"$set": bson.M{"status": "confirmed", "confirmed_at": now}},
+		)
+		if err != nil {
+			return err
+		}
+		if updateRes.MatchedCount == 0 {
+			return fmt.Errorf("purchase order is no longer draft")
+		}
+		po.ConfirmedAt = &now
+		logEntries = attemptLogs
+		return nil
+	}); err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			jsonError(w, "drug not found", http.StatusBadRequest)
 			return
 		}
-
-		// 2. Increment drug stock
-		if _, err := h.db.Drugs().UpdateOne(ctx,
-			bson.M{"_id": item.DrugID},
-			bson.M{"$inc": bson.M{"stock": item.Qty}},
-		); err != nil {
-			jsonError(w, "stock update failed: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		// 3. Auto-create ขย.9 — look up drug for reg_no and unit
-		var drug models.Drug
-		h.db.Drugs().FindOne(ctx, bson.M{"_id": item.DrugID}).Decode(&drug)
-		ky9 := models.Ky9{
-			Date:         receiveDate,
-			DrugName:     item.DrugName,
-			RegNo:        drug.RegNo,
-			Unit:         drug.Unit,
-			Qty:          item.Qty,
-			PricePerUnit: item.CostPrice,
-			TotalValue:   float64(item.Qty) * item.CostPrice,
-			Seller:       po.Supplier,
-			InvoiceNo:    po.InvoiceNo,
-			CreatedAt:    now,
-		}
-		if _, err := h.db.Ky9().InsertOne(ctx, ky9); err != nil {
-			// non-fatal — log แต่ไม่หยุด
-			log.Printf("IMPORT %s: ky9 insert warning for %s: %v", po.DocNo, item.DrugName, err)
-		}
-
-		log.Printf("IMPORT %s: lot %s | %s qty %d | ขย.9 ✓", po.DocNo, item.LotNumber, item.DrugName, item.Qty)
-	}
-
-	// Mark as confirmed
-	_, err = h.db.PurchaseOrders().UpdateOne(ctx, bson.M{"_id": oid},
-		bson.M{"$set": bson.M{"status": "confirmed", "confirmed_at": now}},
-	)
-	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	po.Status = "confirmed"
-	po.ConfirmedAt = &now
+	for _, entry := range logEntries {
+		log.Printf("IMPORT %s: lot %s | %s qty %d | ขย.9 ✓", entry.DocNo, entry.LotNumber, entry.DrugName, entry.Qty)
+	}
 	jsonOK(w, po)
 }
 
@@ -338,20 +378,41 @@ func (h *ImportHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 // buildItems converts POItemInput slice to POItem slice and computes totalCost.
 // Looks up drug name from DB if DrugName is empty.
-func (h *ImportHandler) buildItems(ctx context.Context, inputs []models.POItemInput) ([]models.POItem, float64) {
+func (h *ImportHandler) buildItems(ctx context.Context, inputs []models.POItemInput) ([]models.POItem, float64, error) {
+	if len(inputs) == 0 {
+		return nil, 0, fmt.Errorf("items is required")
+	}
+
 	var items []models.POItem
 	totalCost := 0.0
 	for _, inp := range inputs {
+		if inp.Qty <= 0 {
+			return nil, 0, fmt.Errorf("qty must be > 0")
+		}
+		if inp.CostPrice < 0 {
+			return nil, 0, fmt.Errorf("cost_price must be >= 0")
+		}
+
 		oid, err := bson.ObjectIDFromHex(inp.DrugID)
 		if err != nil {
-			continue
+			return nil, 0, err
 		}
+
+		var drug models.Drug
+		if err := h.db.Drugs().FindOne(ctx, bson.M{"_id": oid}).Decode(&drug); err != nil {
+			return nil, 0, err
+		}
+
 		name := inp.DrugName
 		if name == "" {
-			var drug models.Drug
-			h.db.Drugs().FindOne(ctx, bson.M{"_id": oid}).Decode(&drug)
 			name = drug.Name
 		}
+
+		sellPrice := inp.SellPrice
+		if sellPrice == nil {
+			sellPrice = &drug.SellPrice
+		}
+
 		item := models.POItem{
 			DrugID:     oid,
 			DrugName:   name,
@@ -359,13 +420,10 @@ func (h *ImportHandler) buildItems(ctx context.Context, inputs []models.POItemIn
 			ExpiryDate: inp.ExpiryDate,
 			Qty:        inp.Qty,
 			CostPrice:  inp.CostPrice,
-			SellPrice:  inp.SellPrice,
+			SellPrice:  sellPrice,
 		}
 		items = append(items, item)
 		totalCost += float64(inp.Qty) * inp.CostPrice
 	}
-	if items == nil {
-		items = []models.POItem{}
-	}
-	return items, totalCost
+	return items, totalCost, nil
 }

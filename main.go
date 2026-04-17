@@ -14,7 +14,10 @@ import (
 )
 
 func main() {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatal(err)
+	}
 	database := db.Connect(cfg.MongoURI, cfg.DBName)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

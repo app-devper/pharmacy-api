@@ -237,12 +237,8 @@ func (h *DrugLotHandler) WriteoffLots(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var lot models.DrugLot
-		if err := h.db.DrugLots().FindOne(ctx, bson.M{"_id": lotOID}).Decode(&lot); err != nil {
-			continue // lot not found — skip
-		}
-
-		if _, err := h.db.DrugLots().DeleteOne(ctx, bson.M{"_id": lotOID}); err != nil {
-			continue
+		if err := h.db.DrugLots().FindOneAndDelete(ctx, bson.M{"_id": lotOID}).Decode(&lot); err != nil {
+			continue // not found or already deleted — skip
 		}
 
 		if lot.Remaining > 0 {

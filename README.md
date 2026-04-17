@@ -125,7 +125,8 @@ Authorization: Bearer <token>
 | `POST` | `/api/drugs/:id/lots` | เพิ่มล็อต → `$inc stock` |
 | `DELETE` | `/api/drugs/:id/lots/:lot_id` | ลบล็อต → `$dec stock` ตาม remaining |
 | `GET` | `/api/lots/expiring?days=N` | ล็อตที่หมดอายุหรือจะหมดใน N วัน (default 60) |
-| `POST` | `/api/lots/writeoff` | ตัดจำหน่ายล็อตหมดอายุ |
+| `GET` | `/api/lots/expiring?expired_only=true` | เฉพาะล็อตที่ผ่านวันหมดอายุแล้ว (remaining > 0) |
+| `POST` | `/api/lots/writeoff` | ตัดจำหน่าย bulk ล็อตหมดอายุ → `$dec stock` ต่อล็อต |
 
 ### Sales
 

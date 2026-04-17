@@ -46,7 +46,6 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	// Fetch sale
 	var sale models.Sale
 	if err := h.db.Sales().FindOne(ctx, bson.M{"_id": oid}).Decode(&sale); err != nil {
 		jsonError(w, "sale not found", http.StatusNotFound)
@@ -57,14 +56,16 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build map of SaleItems by ID
 	itemCur, err := h.db.SaleItems().Find(ctx, bson.M{"sale_id": oid})
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	var saleItems []models.SaleItem
-	itemCur.All(ctx, &saleItems)
+	if err := itemCur.All(ctx, &saleItems); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	itemCur.Close(ctx)
 
 	saleItemMap := make(map[string]models.SaleItem, len(saleItems))
@@ -72,13 +73,18 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 		saleItemMap[si.ID.Hex()] = si
 	}
 
-	// Compute already-returned qty per sale_item from existing returns
-	retCur, _ := h.db.DrugReturns().Find(ctx, bson.M{"sale_id": oid})
-	var existingReturns []models.DrugReturn
-	if retCur != nil {
-		retCur.All(ctx, &existingReturns)
-		retCur.Close(ctx)
+	retCur, err := h.db.DrugReturns().Find(ctx, bson.M{"sale_id": oid})
+	if err != nil {
+		jsonError(w, "failed to load existing returns: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
+	var existingReturns []models.DrugReturn
+	if err := retCur.All(ctx, &existingReturns); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	retCur.Close(ctx)
+
 	alreadyReturned := make(map[string]int)
 	for _, ret := range existingReturns {
 		for _, ri := range ret.Items {
@@ -86,7 +92,6 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Validate each input item
 	for _, inp := range input.Items {
 		si, ok := saleItemMap[inp.SaleItemID]
 		if !ok {
@@ -103,7 +108,6 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Generate return number via counter (RET-YYMMDD-NNN)
 	now := time.Now()
 	today := now.Format("060102")
 	counterID := "RET-" + today
@@ -121,7 +125,6 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	returnNo := fmt.Sprintf("RET-%s-%03d", today, counter.Seq)
 
-	// Build return items and restore stock
 	var returnItems []models.ReturnItem
 	var refund float64
 
@@ -141,7 +144,6 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 			Subtotal:   subtotal,
 		})
 
-		// Restore drug stock aggregate
 		h.db.Drugs().UpdateOne(ctx,
 			bson.M{"_id": si.DrugID},
 			bson.M{"$inc": bson.M{"stock": inp.Qty}},
@@ -178,7 +180,6 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Insert DrugReturn document
 	ret := models.DrugReturn{
 		ReturnNo:     returnNo,
 		SaleID:       oid,

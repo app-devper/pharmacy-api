@@ -13,8 +13,9 @@ import (
 )
 
 type MongoDB struct {
-	client *mongo.Client
-	db     *mongo.Database
+	client               *mongo.Client
+	db                   *mongo.Database
+	supportsTransactions bool
 }
 
 func Connect(uri, dbName string) *MongoDB {
@@ -29,22 +30,58 @@ func Connect(uri, dbName string) *MongoDB {
 	if err := client.Ping(ctx, nil); err != nil {
 		log.Fatalf("MongoDB ping error: %v", err)
 	}
+	database := client.Database(dbName)
+	supportsTransactions, err := detectTransactionSupport(ctx, database)
+	if err != nil {
+		log.Printf("MongoDB transaction capability check failed: %v", err)
+	}
 	log.Println("Connected to MongoDB")
-	return &MongoDB{client: client, db: client.Database(dbName)}
+	if !supportsTransactions {
+		log.Println("MongoDB transactions unavailable; falling back to non-transactional writes")
+	}
+	return &MongoDB{client: client, db: database, supportsTransactions: supportsTransactions}
 }
 
-func (m *MongoDB) Drugs() *mongo.Collection     { return m.db.Collection("drugs") }
-func (m *MongoDB) DrugLots() *mongo.Collection  { return m.db.Collection("drug_lots") }
-func (m *MongoDB) Customers() *mongo.Collection { return m.db.Collection("customers") }
-func (m *MongoDB) Sales() *mongo.Collection     { return m.db.Collection("sales") }
-func (m *MongoDB) SaleItems() *mongo.Collection { return m.db.Collection("sale_items") }
-func (m *MongoDB) Counters() *mongo.Collection  { return m.db.Collection("counters") }
-func (m *MongoDB) Ky9() *mongo.Collection       { return m.db.Collection("ky9") }
-func (m *MongoDB) Ky10() *mongo.Collection      { return m.db.Collection("ky10") }
-func (m *MongoDB) Ky11() *mongo.Collection      { return m.db.Collection("ky11") }
-func (m *MongoDB) Ky12() *mongo.Collection           { return m.db.Collection("ky12") }
-func (m *MongoDB) PurchaseOrders() *mongo.Collection { return m.db.Collection("purchase_orders") }
-func (m *MongoDB) Suppliers() *mongo.Collection         { return m.db.Collection("suppliers") }
+func (m *MongoDB) WithTransaction(ctx context.Context, fn func(context.Context) error) error {
+	if !m.supportsTransactions {
+		return fn(ctx)
+	}
+
+	sess, err := m.client.StartSession()
+	if err != nil {
+		return err
+	}
+	defer sess.EndSession(ctx)
+
+	_, err = sess.WithTransaction(ctx, func(txCtx context.Context) (any, error) {
+		return nil, fn(txCtx)
+	})
+	return err
+}
+
+func detectTransactionSupport(ctx context.Context, database *mongo.Database) (bool, error) {
+	var hello struct {
+		SetName string `bson:"setName"`
+		Msg     string `bson:"msg"`
+	}
+	if err := database.RunCommand(ctx, bson.D{{Key: "hello", Value: 1}}).Decode(&hello); err != nil {
+		return false, err
+	}
+	return hello.SetName != "" || hello.Msg == "isdbgrid", nil
+}
+
+func (m *MongoDB) Drugs() *mongo.Collection            { return m.db.Collection("drugs") }
+func (m *MongoDB) DrugLots() *mongo.Collection         { return m.db.Collection("drug_lots") }
+func (m *MongoDB) Customers() *mongo.Collection        { return m.db.Collection("customers") }
+func (m *MongoDB) Sales() *mongo.Collection            { return m.db.Collection("sales") }
+func (m *MongoDB) SaleItems() *mongo.Collection        { return m.db.Collection("sale_items") }
+func (m *MongoDB) Counters() *mongo.Collection         { return m.db.Collection("counters") }
+func (m *MongoDB) Ky9() *mongo.Collection              { return m.db.Collection("ky9") }
+func (m *MongoDB) Ky10() *mongo.Collection             { return m.db.Collection("ky10") }
+func (m *MongoDB) Ky11() *mongo.Collection             { return m.db.Collection("ky11") }
+func (m *MongoDB) Ky12() *mongo.Collection             { return m.db.Collection("ky12") }
+func (m *MongoDB) PurchaseOrders() *mongo.Collection   { return m.db.Collection("purchase_orders") }
+func (m *MongoDB) Suppliers() *mongo.Collection        { return m.db.Collection("suppliers") }
 func (m *MongoDB) StockAdjustments() *mongo.Collection { return m.db.Collection("stock_adjustments") }
 func (m *MongoDB) DrugReturns() *mongo.Collection      { return m.db.Collection("drug_returns") }
 
