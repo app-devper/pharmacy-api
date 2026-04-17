@@ -37,8 +37,9 @@ func main() {
 	suph := handlers.NewSupplierHandler(database)
 	ah := handlers.NewStockAdjustmentHandler(database)
 	reth := handlers.NewReturnHandler(database)
+	mvh := handlers.NewMovementsHandler(database)
 
-	r := routes.Setup(dh, lh, ch, sh, rh, kh, eh, ih, suph, ah, reth, cfg.SecretKey)
+	r := routes.Setup(dh, lh, ch, sh, rh, kh, eh, ih, suph, ah, reth, mvh, cfg.SecretKey)
 
 	addr := fmt.Sprintf(":%s", cfg.Port)
 	log.Printf("Server running on http://localhost%s", addr)

@@ -247,6 +247,20 @@ func (h *DrugLotHandler) WriteoffLots(w http.ResponseWriter, r *http.Request) {
 				bson.M{"$inc": bson.M{"stock": -lot.Remaining}},
 			)
 		}
+
+		// Audit log — lookup drug name then record the write-off
+		var drug models.Drug
+		h.db.Drugs().FindOne(ctx, bson.M{"_id": lot.DrugID}).Decode(&drug)
+		h.db.LotWriteoffs().InsertOne(ctx, models.LotWriteoff{
+			ID:         bson.NewObjectID(),
+			DrugID:     lot.DrugID,
+			DrugName:   drug.Name,
+			LotNumber:  lot.LotNumber,
+			ExpiryDate: lot.ExpiryDate,
+			Qty:        lot.Remaining,
+			CreatedAt:  time.Now(),
+		})
+
 		writtenOff++
 	}
 

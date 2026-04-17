@@ -84,6 +84,7 @@ func (m *MongoDB) PurchaseOrders() *mongo.Collection   { return m.db.Collection(
 func (m *MongoDB) Suppliers() *mongo.Collection        { return m.db.Collection("suppliers") }
 func (m *MongoDB) StockAdjustments() *mongo.Collection { return m.db.Collection("stock_adjustments") }
 func (m *MongoDB) DrugReturns() *mongo.Collection      { return m.db.Collection("drug_returns") }
+func (m *MongoDB) LotWriteoffs() *mongo.Collection     { return m.db.Collection("lot_writeoffs") }
 
 func (m *MongoDB) CreateIndexes(ctx context.Context) {
 	// Unique index on sales.bill_no

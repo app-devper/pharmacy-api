@@ -26,6 +26,7 @@ func Setup(
 	suph *handlers.SupplierHandler,
 	ah *handlers.StockAdjustmentHandler,
 	reth *handlers.ReturnHandler,
+	mvh *handlers.MovementsHandler,
 	secretKey string,
 ) *chi.Mux {
 	r := chi.NewRouter()
@@ -99,6 +100,9 @@ func Setup(
 		r.Post("/suppliers", suph.Create)
 		r.Put("/suppliers/{id}", suph.Update)
 		r.Delete("/suppliers/{id}", suph.Delete)
+
+		// Inventory Movement History
+		r.Get("/movements", mvh.List)
 
 		// PDF Export
 		r.Get("/export/{form}", eh.Export)

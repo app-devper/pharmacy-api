@@ -34,6 +34,18 @@ type ExpiringLotItem struct {
 	DaysLeft   int           `json:"days_left"` // negative = already expired
 }
 
+// LotWriteoff records a write-off event for audit trail.
+// Created by WriteoffLots when an expired/damaged lot is removed.
+type LotWriteoff struct {
+	ID         bson.ObjectID `bson:"_id,omitempty" json:"id"`
+	DrugID     bson.ObjectID `bson:"drug_id"       json:"drug_id"`
+	DrugName   string        `bson:"drug_name"     json:"drug_name"`
+	LotNumber  string        `bson:"lot_number"    json:"lot_number"`
+	ExpiryDate time.Time     `bson:"expiry_date"   json:"expiry_date"`
+	Qty        int           `bson:"qty"           json:"qty"` // amount written off (positive)
+	CreatedAt  time.Time     `bson:"created_at"    json:"created_at"`
+}
+
 // DrugLotInput is the POST body for creating a lot.
 // Dates as ISO-8601 strings "YYYY-MM-DD".
 type DrugLotInput struct {
