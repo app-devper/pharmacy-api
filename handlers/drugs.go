@@ -3,17 +3,33 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
 	mw "pharmacy-pos/backend/middleware"
 	"pharmacy-pos/backend/models"
 )
+
+// isMongoDuplicate returns true when err is a MongoDB duplicate-key (code 11000) error.
+func isMongoDuplicate(err error) bool {
+	var we mongo.WriteException
+	if errors.As(err, &we) {
+		for _, e := range we.WriteErrors {
+			if e.Code == 11000 {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 type DrugHandler struct{ dbm *db.Manager }
 
@@ -60,8 +76,9 @@ func (h *DrugHandler) Add(w http.ResponseWriter, r *http.Request) {
 		input.Type = "ยาสามัญ"
 	}
 	if input.Unit == "" {
-		input.Unit = "เม็ด"
+		input.Unit = "ชิ้น"
 	}
+	input.Barcode = strings.TrimSpace(input.Barcode)
 
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
@@ -91,13 +108,16 @@ func (h *DrugHandler) Add(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := mdb.Drugs().InsertOne(ctx, drug)
 	if err != nil {
+		if isMongoDuplicate(err) {
+			jsonError(w, "บาร์โค้ดนี้มีอยู่ในระบบแล้ว", http.StatusConflict)
+			return
+		}
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	drug.ID = res.InsertedID.(bson.ObjectID)
 	jsonOK(w, drug)
 }
-
 
 func (h *DrugHandler) Update(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
@@ -115,6 +135,7 @@ func (h *DrugHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if input.ReportTypes == nil {
 		input.ReportTypes = []string{}
 	}
+	input.Barcode = strings.TrimSpace(input.Barcode)
 
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
@@ -141,6 +162,10 @@ func (h *DrugHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}},
 	)
 	if err != nil {
+		if isMongoDuplicate(err) {
+			jsonError(w, "บาร์โค้ดนี้มีอยู่ในระบบแล้ว", http.StatusConflict)
+			return
+		}
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

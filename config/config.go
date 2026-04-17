@@ -19,7 +19,7 @@ func Load() (*Config, error) {
 	_ = godotenv.Load()
 	cfg := &Config{
 		MongoURI:  getEnv("MONGO_URI", "mongodb://localhost:27017"),
-		DBPrefix:  getEnv("DB_PREFIX", getEnv("DB_NAME", "pharmacy")), // backward-compat: fall back to DB_NAME
+		DBPrefix:  getEnv("DB_PREFIX", "pharmacy"),
 		Port:      getEnv("PORT", "8080"),
 		SecretKey: os.Getenv("SECRET_KEY"),
 		System:    os.Getenv("SYSTEM"),

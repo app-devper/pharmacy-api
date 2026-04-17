@@ -282,6 +282,18 @@ func (m *MongoDB) CreateIndexes(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
+	// Partial unique index on drugs.barcode — only enforced for non-empty string barcodes.
+	// A plain sparse index would still index empty strings (the field is always present
+	// because the bson tag has no omitempty), causing duplicate-key errors for multiple
+	// drugs with no barcode. A partial filter correctly excludes "" values.
+	if _, err := m.Drugs().Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "barcode", Value: 1}},
+		Options: options.Index().SetUnique(true).SetPartialFilterExpression(
+			bson.M{"barcode": bson.M{"$type": "string", "$gt": ""}},
+		),
+	}); err != nil {
+		return err
+	}
 	return nil
 }
 
