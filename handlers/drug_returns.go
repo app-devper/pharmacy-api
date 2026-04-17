@@ -12,12 +12,13 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
+	mw "pharmacy-pos/backend/middleware"
 	"pharmacy-pos/backend/models"
 )
 
-type ReturnHandler struct{ db *db.MongoDB }
+type ReturnHandler struct{ dbm *db.Manager }
 
-func NewReturnHandler(d *db.MongoDB) *ReturnHandler { return &ReturnHandler{db: d} }
+func NewReturnHandler(d *db.Manager) *ReturnHandler { return &ReturnHandler{dbm: d} }
 
 // Create processes a partial drug return linked to an existing sale.
 // POST /api/sales/{id}/return
@@ -43,11 +44,16 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
 	var sale models.Sale
-	if err := h.db.Sales().FindOne(ctx, bson.M{"_id": oid}).Decode(&sale); err != nil {
+	if err := mdb.Sales().FindOne(ctx, bson.M{"_id": oid}).Decode(&sale); err != nil {
 		jsonError(w, "sale not found", http.StatusNotFound)
 		return
 	}
@@ -56,7 +62,7 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	itemCur, err := h.db.SaleItems().Find(ctx, bson.M{"sale_id": oid})
+	itemCur, err := mdb.SaleItems().Find(ctx, bson.M{"sale_id": oid})
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -73,7 +79,7 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 		saleItemMap[si.ID.Hex()] = si
 	}
 
-	retCur, err := h.db.DrugReturns().Find(ctx, bson.M{"sale_id": oid})
+	retCur, err := mdb.DrugReturns().Find(ctx, bson.M{"sale_id": oid})
 	if err != nil {
 		jsonError(w, "failed to load existing returns: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -114,7 +120,7 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var counter struct {
 		Seq int `bson:"seq"`
 	}
-	err = h.db.Counters().FindOneAndUpdate(ctx,
+	err = mdb.Counters().FindOneAndUpdate(ctx,
 		bson.M{"_id": counterID},
 		bson.M{"$inc": bson.M{"seq": 1}},
 		options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.After),
@@ -144,13 +150,13 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 			Subtotal:   subtotal,
 		})
 
-		h.db.Drugs().UpdateOne(ctx,
+		mdb.Drugs().UpdateOne(ctx,
 			bson.M{"_id": si.DrugID},
 			bson.M{"$inc": bson.M{"stock": inp.Qty}},
 		)
 
 		// Reverse-FEFO: restore lot.remaining (latest-expiring first)
-		lotCur, lotErr := h.db.DrugLots().Find(ctx,
+		lotCur, lotErr := mdb.DrugLots().Find(ctx,
 			bson.M{"drug_id": si.DrugID},
 			options.Find().SetSort(bson.D{{Key: "expiry_date", Value: -1}}),
 		)
@@ -171,7 +177,7 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 				if restore > need {
 					restore = need
 				}
-				h.db.DrugLots().UpdateOne(ctx,
+				mdb.DrugLots().UpdateOne(ctx,
 					bson.M{"_id": lot.ID},
 					bson.M{"$inc": bson.M{"remaining": restore}},
 				)
@@ -191,7 +197,7 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Reason:       input.Reason,
 		ReturnedAt:   now,
 	}
-	res, err := h.db.DrugReturns().InsertOne(ctx, ret)
+	res, err := mdb.DrugReturns().InsertOne(ctx, ret)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -200,7 +206,7 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	// Reverse customer spend
 	if sale.CustomerID != nil {
-		h.db.Customers().UpdateOne(ctx,
+		mdb.Customers().UpdateOne(ctx,
 			bson.M{"_id": sale.CustomerID},
 			bson.M{"$inc": bson.M{"total_spent": -refund}},
 		)
@@ -219,10 +225,15 @@ func (h *ReturnHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	cur, err := h.db.DrugReturns().Find(ctx,
+	cur, err := mdb.DrugReturns().Find(ctx,
 		bson.M{"sale_id": oid},
 		options.Find().SetSort(bson.D{{Key: "returned_at", Value: -1}}),
 	)

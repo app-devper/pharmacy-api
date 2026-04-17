@@ -15,6 +15,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"pharmacy-pos/backend/db"
+	mw "pharmacy-pos/backend/middleware"
 )
 
 // MovementEntry is one unified stock-movement record returned by GET /api/movements.
@@ -29,13 +30,18 @@ type MovementEntry struct {
 	At        time.Time `json:"at"`
 }
 
-type MovementsHandler struct{ db *db.MongoDB }
+type MovementsHandler struct{ dbm *db.Manager }
 
-func NewMovementsHandler(d *db.MongoDB) *MovementsHandler { return &MovementsHandler{db: d} }
+func NewMovementsHandler(d *db.Manager) *MovementsHandler { return &MovementsHandler{dbm: d} }
 
 // List handles GET /api/movements
 // Query params: from, to (YYYY-MM-DD), drug_name, types (comma-sep), limit, offset
 func (h *MovementsHandler) List(w http.ResponseWriter, r *http.Request) {
+	d, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	q := r.URL.Query()
 
 	// --- date range ---
@@ -101,35 +107,35 @@ func (h *MovementsHandler) List(w http.ResponseWriter, r *http.Request) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			addEntries(h.fetchImports(ctx, from, to, drugName))
+			addEntries(fetchImports(ctx, d, from, to, drugName))
 		}()
 	}
 	if typeSet["sale"] {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			addEntries(h.fetchSales(ctx, from, to, drugName))
+			addEntries(fetchSales(ctx, d, from, to, drugName))
 		}()
 	}
 	if typeSet["return"] {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			addEntries(h.fetchReturns(ctx, from, to, drugName))
+			addEntries(fetchReturns(ctx, d, from, to, drugName))
 		}()
 	}
 	if typeSet["adjustment"] {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			addEntries(h.fetchAdjustments(ctx, from, to, drugName))
+			addEntries(fetchAdjustments(ctx, d, from, to, drugName))
 		}()
 	}
 	if typeSet["writeoff"] {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			addEntries(h.fetchWriteoffs(ctx, from, to, drugName))
+			addEntries(fetchWriteoffs(ctx, d, from, to, drugName))
 		}()
 	}
 
@@ -162,7 +168,7 @@ func (h *MovementsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 // ─── import ───────────────────────────────────────────────────────────────────
 
-func (h *MovementsHandler) fetchImports(ctx context.Context, from, to time.Time, drugName string) []MovementEntry {
+func fetchImports(ctx context.Context, d *db.MongoDB, from, to time.Time, drugName string) []MovementEntry {
 	matchStage := bson.D{
 		{Key: "import_date", Value: bson.M{"$gte": from, "$lt": to}},
 	}
@@ -181,7 +187,7 @@ func (h *MovementsHandler) fetchImports(ctx context.Context, from, to time.Time,
 	}
 	pipeline = append(pipeline, bson.D{{Key: "$limit", Value: 2000}})
 
-	cur, err := h.db.DrugLots().Aggregate(ctx, pipeline)
+	cur, err := d.DrugLots().Aggregate(ctx, pipeline)
 	if err != nil {
 		return nil
 	}
@@ -216,7 +222,7 @@ func (h *MovementsHandler) fetchImports(ctx context.Context, from, to time.Time,
 
 // ─── sale ─────────────────────────────────────────────────────────────────────
 
-func (h *MovementsHandler) fetchSales(ctx context.Context, from, to time.Time, drugName string) []MovementEntry {
+func fetchSales(ctx context.Context, d *db.MongoDB, from, to time.Time, drugName string) []MovementEntry {
 	pipeline := mongo.Pipeline{
 		// join with sales to get sold_at, bill_no, voided
 		{{Key: "$lookup", Value: bson.M{
@@ -242,7 +248,7 @@ func (h *MovementsHandler) fetchSales(ctx context.Context, from, to time.Time, d
 	}
 	pipeline = append(pipeline, bson.D{{Key: "$limit", Value: 5000}})
 
-	cur, err := h.db.SaleItems().Aggregate(ctx, pipeline)
+	cur, err := d.SaleItems().Aggregate(ctx, pipeline)
 	if err != nil {
 		return nil
 	}
@@ -279,7 +285,7 @@ func (h *MovementsHandler) fetchSales(ctx context.Context, from, to time.Time, d
 
 // ─── return ───────────────────────────────────────────────────────────────────
 
-func (h *MovementsHandler) fetchReturns(ctx context.Context, from, to time.Time, drugName string) []MovementEntry {
+func fetchReturns(ctx context.Context, d *db.MongoDB, from, to time.Time, drugName string) []MovementEntry {
 	matchName := bson.M{}
 	if drugName != "" {
 		matchName = bson.M{
@@ -298,7 +304,7 @@ func (h *MovementsHandler) fetchReturns(ctx context.Context, from, to time.Time,
 	}
 	pipeline = append(pipeline, bson.D{{Key: "$limit", Value: 2000}})
 
-	cur, err := h.db.DrugReturns().Aggregate(ctx, pipeline)
+	cur, err := d.DrugReturns().Aggregate(ctx, pipeline)
 	if err != nil {
 		return nil
 	}
@@ -333,7 +339,7 @@ func (h *MovementsHandler) fetchReturns(ctx context.Context, from, to time.Time,
 
 // ─── adjustment ───────────────────────────────────────────────────────────────
 
-func (h *MovementsHandler) fetchAdjustments(ctx context.Context, from, to time.Time, drugName string) []MovementEntry {
+func fetchAdjustments(ctx context.Context, d *db.MongoDB, from, to time.Time, drugName string) []MovementEntry {
 	filter := bson.M{
 		"created_at": bson.M{"$gte": from, "$lt": to},
 	}
@@ -341,7 +347,7 @@ func (h *MovementsHandler) fetchAdjustments(ctx context.Context, from, to time.T
 		filter["drug_name"] = bson.M{"$regex": regexp.QuoteMeta(drugName), "$options": "i"}
 	}
 
-	cur, err := h.db.StockAdjustments().Find(ctx, filter)
+	cur, err := d.StockAdjustments().Find(ctx, filter)
 	if err != nil {
 		return nil
 	}
@@ -376,7 +382,7 @@ func (h *MovementsHandler) fetchAdjustments(ctx context.Context, from, to time.T
 
 // ─── writeoff ─────────────────────────────────────────────────────────────────
 
-func (h *MovementsHandler) fetchWriteoffs(ctx context.Context, from, to time.Time, drugName string) []MovementEntry {
+func fetchWriteoffs(ctx context.Context, d *db.MongoDB, from, to time.Time, drugName string) []MovementEntry {
 	filter := bson.M{
 		"created_at": bson.M{"$gte": from, "$lt": to},
 	}
@@ -384,7 +390,7 @@ func (h *MovementsHandler) fetchWriteoffs(ctx context.Context, from, to time.Tim
 		filter["drug_name"] = bson.M{"$regex": regexp.QuoteMeta(drugName), "$options": "i"}
 	}
 
-	cur, err := h.db.LotWriteoffs().Find(ctx, filter)
+	cur, err := d.LotWriteoffs().Find(ctx, filter)
 	if err != nil {
 		return nil
 	}

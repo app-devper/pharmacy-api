@@ -18,28 +18,37 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	database := db.Connect(cfg.MongoURI, cfg.DBName)
+	manager := db.NewManager(cfg.MongoURI, cfg.DBPrefix)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	database.CreateIndexes(ctx)
-	database.Seed(ctx)
+	// Bootstrap the default client "000" with indexes + seed data.
+	// Fail fast so we don't start serving with a broken default tenant.
+	if err := manager.CreateIndexesForClient(ctx, "000"); err != nil {
+		log.Fatalf("bootstrap indexes for default tenant: %v", err)
+	}
+	if err := manager.SeedForClient(ctx, "000"); err != nil {
+		log.Fatalf("bootstrap seed for default tenant: %v", err)
+	}
 
-	dh := handlers.NewDrugHandler(database)
-	lh := handlers.NewDrugLotHandler(database)
-	ch := handlers.NewCustomerHandler(database)
-	sh := handlers.NewSaleHandler(database)
-	rh := handlers.NewReportHandler(database)
-	kh := handlers.NewKyHandler(database)
-	eh := handlers.NewExportHandler(database)
-	ih := handlers.NewImportHandler(database)
-	suph := handlers.NewSupplierHandler(database)
-	ah := handlers.NewStockAdjustmentHandler(database)
-	reth := handlers.NewReturnHandler(database)
-	mvh := handlers.NewMovementsHandler(database)
+	dh := handlers.NewDrugHandler(manager)
+	lh := handlers.NewDrugLotHandler(manager)
+	ch := handlers.NewCustomerHandler(manager)
+	sh := handlers.NewSaleHandler(manager)
+	rh := handlers.NewReportHandler(manager)
+	kh := handlers.NewKyHandler(manager)
+	eh := handlers.NewExportHandler(manager)
+	ih := handlers.NewImportHandler(manager)
+	suph := handlers.NewSupplierHandler(manager)
+	ah := handlers.NewStockAdjustmentHandler(manager)
+	reth := handlers.NewReturnHandler(manager)
+	mvh := handlers.NewMovementsHandler(manager)
 
-	r := routes.Setup(dh, lh, ch, sh, rh, kh, eh, ih, suph, ah, reth, mvh, cfg.SecretKey)
+	r := routes.Setup(
+		dh, lh, ch, sh, rh, kh, eh, ih, suph, ah, reth, mvh,
+		cfg.SecretKey, cfg.System,
+	)
 
 	addr := fmt.Sprintf(":%s", cfg.Port)
 	log.Printf("Server running on http://localhost%s", addr)

@@ -95,7 +95,8 @@ Authorization: Bearer <token>
 
 - Token ได้จาก **Um-Api** (`POST /api/um/v1/auth/login`)
 - Backend verify token locally ด้วย shared `SECRET_KEY` (HS256)
-- JWT claims: `role` (SUPER/ADMIN/USER), `system`, `clientId`, `sessionId`
+- JWT claims: `role` (SUPER/ADMIN/USER), `system`, `clientId`, `sessionId`, `exp`
+- Environment ที่ต้องตั้งเพิ่ม: `SYSTEM`
 
 ---
 

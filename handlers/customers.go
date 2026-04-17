@@ -11,18 +11,24 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
+	mw "pharmacy-pos/backend/middleware"
 	"pharmacy-pos/backend/models"
 )
 
-type CustomerHandler struct{ db *db.MongoDB }
+type CustomerHandler struct{ dbm *db.Manager }
 
-func NewCustomerHandler(d *db.MongoDB) *CustomerHandler { return &CustomerHandler{db: d} }
+func NewCustomerHandler(d *db.Manager) *CustomerHandler { return &CustomerHandler{dbm: d} }
 
 func (h *CustomerHandler) List(w http.ResponseWriter, r *http.Request) {
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	cur, err := h.db.Customers().Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
+	cur, err := mdb.Customers().Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -54,6 +60,11 @@ func (h *CustomerHandler) Add(w http.ResponseWriter, r *http.Request) {
 		input.Disease = "-"
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
@@ -63,7 +74,7 @@ func (h *CustomerHandler) Add(w http.ResponseWriter, r *http.Request) {
 		Disease:   input.Disease,
 		CreatedAt: time.Now(),
 	}
-	res, err := h.db.Customers().InsertOne(ctx, cust)
+	res, err := mdb.Customers().InsertOne(ctx, cust)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -94,11 +105,16 @@ func (h *CustomerHandler) Update(w http.ResponseWriter, r *http.Request) {
 		input.Disease = "-"
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
 	var updated models.Customer
-	err = h.db.Customers().FindOneAndUpdate(ctx,
+	err = mdb.Customers().FindOneAndUpdate(ctx,
 		bson.M{"_id": oid},
 		bson.M{"$set": bson.M{
 			"name":    input.Name,
@@ -123,10 +139,15 @@ func (h *CustomerHandler) GetSales(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	cur, err := h.db.Sales().Find(ctx,
+	cur, err := mdb.Sales().Find(ctx,
 		bson.M{"customer_id": oid},
 		options.Find().SetSort(bson.D{{Key: "sold_at", Value: -1}}).SetLimit(100),
 	)

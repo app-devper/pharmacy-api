@@ -12,13 +12,14 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
+	mw "pharmacy-pos/backend/middleware"
 	"pharmacy-pos/backend/models"
 )
 
-type StockAdjustmentHandler struct{ db *db.MongoDB }
+type StockAdjustmentHandler struct{ dbm *db.Manager }
 
-func NewStockAdjustmentHandler(d *db.MongoDB) *StockAdjustmentHandler {
-	return &StockAdjustmentHandler{db: d}
+func NewStockAdjustmentHandler(d *db.Manager) *StockAdjustmentHandler {
+	return &StockAdjustmentHandler{dbm: d}
 }
 
 // Create records a manual stock adjustment and atomically updates drug.stock.
@@ -49,12 +50,17 @@ func (h *StockAdjustmentHandler) Create(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
 	// Atomically increment stock and get the updated drug in one round-trip.
 	var updated models.Drug
-	err = h.db.Drugs().FindOneAndUpdate(ctx,
+	err = mdb.Drugs().FindOneAndUpdate(ctx,
 		bson.M{"_id": oid},
 		bson.M{"$inc": bson.M{"stock": input.Delta}},
 		options.FindOneAndUpdate().SetReturnDocument(options.After),
@@ -75,7 +81,7 @@ func (h *StockAdjustmentHandler) Create(w http.ResponseWriter, r *http.Request) 
 		Note:      input.Note,
 		CreatedAt: time.Now(),
 	}
-	if _, err := h.db.StockAdjustments().InsertOne(ctx, adj); err != nil {
+	if _, err := mdb.StockAdjustments().InsertOne(ctx, adj); err != nil {
 		// Non-fatal: stock was already updated; log the error and continue.
 		// In production this could be retried or queued.
 		_ = err
@@ -94,10 +100,15 @@ func (h *StockAdjustmentHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	cur, err := h.db.StockAdjustments().Find(ctx,
+	cur, err := mdb.StockAdjustments().Find(ctx,
 		bson.M{"drug_id": oid},
 		options.Find().
 			SetSort(bson.D{{Key: "created_at", Value: -1}}).

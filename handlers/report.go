@@ -10,14 +10,20 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
+	mw "pharmacy-pos/backend/middleware"
 	"pharmacy-pos/backend/models"
 )
 
-type ReportHandler struct{ db *db.MongoDB }
+type ReportHandler struct{ dbm *db.Manager }
 
-func NewReportHandler(d *db.MongoDB) *ReportHandler { return &ReportHandler{db: d} }
+func NewReportHandler(d *db.Manager) *ReportHandler { return &ReportHandler{dbm: d} }
 
 func (h *ReportHandler) Summary(w http.ResponseWriter, r *http.Request) {
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
@@ -26,12 +32,12 @@ func (h *ReportHandler) Summary(w http.ResponseWriter, r *http.Request) {
 	endOfDay := startOfDay.Add(24 * time.Hour)
 	startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 
-	todaySales := sumSales(ctx, h.db, bson.M{"sold_at": bson.M{"$gte": startOfDay, "$lt": endOfDay}})
-	todayBills := countDocs(ctx, h.db, bson.M{"sold_at": bson.M{"$gte": startOfDay, "$lt": endOfDay}})
-	monthSales := sumSales(ctx, h.db, bson.M{"sold_at": bson.M{"$gte": startOfMonth}})
-	stockValue := calcStockValue(ctx, h.db)
-	lowStock := int(countDrugs(ctx, h.db, bson.M{"stock": bson.M{"$gt": 0, "$lte": 20}}))
-	outStock := int(countDrugs(ctx, h.db, bson.M{"stock": 0}))
+	todaySales := sumSales(ctx, mdb, bson.M{"sold_at": bson.M{"$gte": startOfDay, "$lt": endOfDay}})
+	todayBills := countDocs(ctx, mdb, bson.M{"sold_at": bson.M{"$gte": startOfDay, "$lt": endOfDay}})
+	monthSales := sumSales(ctx, mdb, bson.M{"sold_at": bson.M{"$gte": startOfMonth}})
+	stockValue := calcStockValue(ctx, mdb)
+	lowStock := int(countDrugs(ctx, mdb, bson.M{"stock": bson.M{"$gt": 0, "$lte": 20}}))
+	outStock := int(countDrugs(ctx, mdb, bson.M{"stock": 0}))
 
 	jsonOK(w, models.ReportSummary{
 		TodaySales: todaySales,
@@ -50,6 +56,11 @@ func (h *ReportHandler) Daily(w http.ResponseWriter, r *http.Request) {
 		days = d
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
@@ -65,7 +76,7 @@ func (h *ReportHandler) Daily(w http.ResponseWriter, r *http.Request) {
 		bson.M{"$project": bson.M{"day": "$_id", "total": 1, "_id": 0}},
 	}
 
-	cur, err := h.db.Sales().Aggregate(ctx, pipeline)
+	cur, err := mdb.Sales().Aggregate(ctx, pipeline)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -103,13 +114,18 @@ func (h *ReportHandler) Eod(w http.ResponseWriter, r *http.Request) {
 	}
 	endOfDay = startOfDay.Add(24 * time.Hour)
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
 	filter := notVoided(bson.M{"sold_at": bson.M{"$gte": startOfDay, "$lt": endOfDay}})
 
 	// Fetch all bills for the day
-	cur, err := h.db.Sales().Find(ctx, filter,
+	cur, err := mdb.Sales().Find(ctx, filter,
 		options.Find().SetSort(bson.D{{Key: "sold_at", Value: 1}}),
 	)
 	if err != nil {
@@ -169,6 +185,11 @@ func (h *ReportHandler) Profit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
@@ -230,7 +251,7 @@ func (h *ReportHandler) Profit(w http.ResponseWriter, r *http.Request) {
 		bson.M{"$sort": bson.M{"profit": -1}},
 	}
 
-	cur, err := h.db.Sales().Aggregate(ctx, pipeline)
+	cur, err := mdb.Sales().Aggregate(ctx, pipeline)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -256,7 +277,7 @@ func (h *ReportHandler) Profit(w http.ResponseWriter, r *http.Request) {
 	if summary.Revenue > 0 {
 		summary.Margin = summary.Profit / summary.Revenue * 100
 	}
-	summary.Bills = int(countDocs(ctx, h.db, dateFilter))
+	summary.Bills = int(countDocs(ctx, mdb, dateFilter))
 
 	jsonOK(w, models.ProfitReport{Summary: summary, ByDrug: byDrug})
 }
@@ -269,6 +290,11 @@ func (h *ReportHandler) TopDrugs(w http.ResponseWriter, r *http.Request) {
 		days = d
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
@@ -293,7 +319,7 @@ func (h *ReportHandler) TopDrugs(w http.ResponseWriter, r *http.Request) {
 		bson.M{"$limit": 10},
 	}
 
-	cur, err := h.db.Sales().Aggregate(ctx, pipeline)
+	cur, err := mdb.Sales().Aggregate(ctx, pipeline)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -319,6 +345,11 @@ func (h *ReportHandler) SlowDrugs(w http.ResponseWriter, r *http.Request) {
 		days = d
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
@@ -336,7 +367,7 @@ func (h *ReportHandler) SlowDrugs(w http.ResponseWriter, r *http.Request) {
 		bson.M{"$unwind": "$items"},
 		bson.M{"$group": bson.M{"_id": "$items.drug_id"}},
 	}
-	cur, err := h.db.Sales().Aggregate(ctx, pipeline)
+	cur, err := mdb.Sales().Aggregate(ctx, pipeline)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -359,7 +390,7 @@ func (h *ReportHandler) SlowDrugs(w http.ResponseWriter, r *http.Request) {
 		"stock": bson.M{"$gt": 0},
 		"_id":   bson.M{"$nin": soldIDs},
 	}
-	drugCur, err := h.db.Drugs().Find(ctx, filter,
+	drugCur, err := mdb.Drugs().Find(ctx, filter,
 		options.Find().SetSort(bson.D{{Key: "stock", Value: -1}}).SetLimit(30),
 	)
 	if err != nil {
@@ -387,6 +418,11 @@ func (h *ReportHandler) Monthly(w http.ResponseWriter, r *http.Request) {
 		months = m
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
@@ -434,7 +470,7 @@ func (h *ReportHandler) Monthly(w http.ResponseWriter, r *http.Request) {
 		}},
 	}
 
-	cur, err := h.db.Sales().Aggregate(ctx, pipeline)
+	cur, err := mdb.Sales().Aggregate(ctx, pipeline)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return

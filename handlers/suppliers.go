@@ -11,15 +11,21 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
+	mw "pharmacy-pos/backend/middleware"
 	"pharmacy-pos/backend/models"
 )
 
-type SupplierHandler struct{ db *db.MongoDB }
+type SupplierHandler struct{ dbm *db.Manager }
 
-func NewSupplierHandler(d *db.MongoDB) *SupplierHandler { return &SupplierHandler{db: d} }
+func NewSupplierHandler(d *db.Manager) *SupplierHandler { return &SupplierHandler{dbm: d} }
 
 // List returns all suppliers sorted by name, with optional ?q= name filter.
 func (h *SupplierHandler) List(w http.ResponseWriter, r *http.Request) {
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
@@ -28,7 +34,7 @@ func (h *SupplierHandler) List(w http.ResponseWriter, r *http.Request) {
 		filter["name"] = bson.M{"$regex": q, "$options": "i"}
 	}
 
-	cur, err := h.db.Suppliers().Find(ctx, filter,
+	cur, err := mdb.Suppliers().Find(ctx, filter,
 		options.Find().SetSort(bson.D{{Key: "name", Value: 1}}),
 	)
 	if err != nil {
@@ -60,6 +66,11 @@ func (h *SupplierHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
@@ -72,7 +83,7 @@ func (h *SupplierHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Notes:       input.Notes,
 		CreatedAt:   time.Now(),
 	}
-	res, err := h.db.Suppliers().InsertOne(ctx, supplier)
+	res, err := mdb.Suppliers().InsertOne(ctx, supplier)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -100,11 +111,16 @@ func (h *SupplierHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
 	var updated models.Supplier
-	err = h.db.Suppliers().FindOneAndUpdate(ctx,
+	err = mdb.Suppliers().FindOneAndUpdate(ctx,
 		bson.M{"_id": oid},
 		bson.M{"$set": bson.M{
 			"name":         input.Name,
@@ -132,10 +148,15 @@ func (h *SupplierHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	_, err = h.db.Suppliers().DeleteOne(ctx, bson.M{"_id": oid})
+	_, err = mdb.Suppliers().DeleteOne(ctx, bson.M{"_id": oid})
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return

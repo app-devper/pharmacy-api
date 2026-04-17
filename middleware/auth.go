@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -24,7 +25,7 @@ type AccessClaims struct {
 	jwt.RegisteredClaims
 }
 
-func RequireAuth(secretKey string) func(http.Handler) http.Handler {
+func RequireAuth(secretKey, expectedSystem string) func(http.Handler) http.Handler {
 	jwtKey := []byte(secretKey)
 
 	return func(next http.Handler) http.Handler {
@@ -43,9 +44,20 @@ func RequireAuth(secretKey string) func(http.Handler) http.Handler {
 
 			claims := &AccessClaims{}
 			tkn, err := jwt.ParseWithClaims(parts[1], claims, func(token *jwt.Token) (interface{}, error) {
+				if token.Method == nil || token.Method.Alg() != jwt.SigningMethodHS256.Alg() {
+					return nil, errors.New("unexpected signing method")
+				}
 				return jwtKey, nil
 			})
-			if err != nil || tkn == nil || !tkn.Valid || claims.ID == "" {
+			if err != nil || tkn == nil || !tkn.Valid || claims.ID == "" || claims.ClientId == "" {
+				http.Error(w, `{"error":"token invalid or expired"}`, http.StatusUnauthorized)
+				return
+			}
+			if claims.ExpiresAt == nil {
+				http.Error(w, `{"error":"token invalid or expired"}`, http.StatusUnauthorized)
+				return
+			}
+			if claims.System != expectedSystem {
 				http.Error(w, `{"error":"token invalid or expired"}`, http.StatusUnauthorized)
 				return
 			}

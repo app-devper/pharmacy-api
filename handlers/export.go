@@ -11,18 +11,24 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
+	mw "pharmacy-pos/backend/middleware"
 	"pharmacy-pos/backend/models"
 	"pharmacy-pos/backend/pdf"
 )
 
-type ExportHandler struct{ db *db.MongoDB }
+type ExportHandler struct{ dbm *db.Manager }
 
-func NewExportHandler(d *db.MongoDB) *ExportHandler { return &ExportHandler{db: d} }
+func NewExportHandler(d *db.Manager) *ExportHandler { return &ExportHandler{dbm: d} }
 
 func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 	form := chi.URLParam(r, "form")
 	month := r.URL.Query().Get("month")
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
@@ -35,11 +41,10 @@ func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 	filename := fmt.Sprintf("%s-%s.pdf", form, month)
 
 	var buf interface{ Bytes() []byte }
-	var err error
 
 	switch form {
 	case "ky9":
-		cur, e := h.db.Ky9().Find(ctx, filter, sortOpt)
+		cur, e := mdb.Ky9().Find(ctx, filter, sortOpt)
 		if e != nil {
 			jsonError(w, e.Error(), http.StatusInternalServerError)
 			return
@@ -57,7 +62,7 @@ func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 		return
 
 	case "ky10":
-		cur, e := h.db.Ky10().Find(ctx, filter, sortOpt)
+		cur, e := mdb.Ky10().Find(ctx, filter, sortOpt)
 		if e != nil {
 			jsonError(w, e.Error(), http.StatusInternalServerError)
 			return
@@ -75,7 +80,7 @@ func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 		return
 
 	case "ky11":
-		cur, e := h.db.Ky11().Find(ctx, filter, sortOpt)
+		cur, e := mdb.Ky11().Find(ctx, filter, sortOpt)
 		if e != nil {
 			jsonError(w, e.Error(), http.StatusInternalServerError)
 			return
@@ -93,7 +98,7 @@ func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 		return
 
 	case "ky12":
-		cur, e := h.db.Ky12().Find(ctx, filter, sortOpt)
+		cur, e := mdb.Ky12().Find(ctx, filter, sortOpt)
 		if e != nil {
 			jsonError(w, e.Error(), http.StatusInternalServerError)
 			return

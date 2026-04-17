@@ -12,12 +12,13 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
+	mw "pharmacy-pos/backend/middleware"
 	"pharmacy-pos/backend/models"
 )
 
-type DrugLotHandler struct{ db *db.MongoDB }
+type DrugLotHandler struct{ dbm *db.Manager }
 
-func NewDrugLotHandler(d *db.MongoDB) *DrugLotHandler { return &DrugLotHandler{db: d} }
+func NewDrugLotHandler(d *db.Manager) *DrugLotHandler { return &DrugLotHandler{dbm: d} }
 
 // ListLots returns all lots for a drug, sorted by expiry_date ASC (FEFO order).
 func (h *DrugLotHandler) ListLots(w http.ResponseWriter, r *http.Request) {
@@ -28,10 +29,15 @@ func (h *DrugLotHandler) ListLots(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	cur, err := h.db.DrugLots().Find(ctx,
+	cur, err := mdb.DrugLots().Find(ctx,
 		bson.M{"drug_id": drugOID},
 		options.Find().SetSort(bson.D{{Key: "expiry_date", Value: 1}}),
 	)
@@ -92,6 +98,11 @@ func (h *DrugLotHandler) AddLot(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
@@ -107,7 +118,7 @@ func (h *DrugLotHandler) AddLot(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:  time.Now(),
 	}
 
-	res, err := h.db.DrugLots().InsertOne(ctx, lot)
+	res, err := mdb.DrugLots().InsertOne(ctx, lot)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -115,7 +126,7 @@ func (h *DrugLotHandler) AddLot(w http.ResponseWriter, r *http.Request) {
 	lot.ID = res.InsertedID.(bson.ObjectID)
 
 	// Atomically increment drug.stock by lot quantity
-	_, err = h.db.Drugs().UpdateOne(ctx,
+	_, err = mdb.Drugs().UpdateOne(ctx,
 		bson.M{"_id": drugOID},
 		bson.M{"$inc": bson.M{"stock": input.Quantity}},
 	)
@@ -137,6 +148,11 @@ func (h *DrugLotHandler) Expiring(w http.ResponseWriter, r *http.Request) {
 	}
 	expiredOnly := r.URL.Query().Get("expired_only") == "true"
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
@@ -156,7 +172,7 @@ func (h *DrugLotHandler) Expiring(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	cur, err := h.db.DrugLots().Find(ctx,
+	cur, err := mdb.DrugLots().Find(ctx,
 		filter,
 		options.Find().SetSort(bson.D{{Key: "expiry_date", Value: 1}}),
 	)
@@ -186,7 +202,7 @@ func (h *DrugLotHandler) Expiring(w http.ResponseWriter, r *http.Request) {
 	for id := range drugIDSet {
 		ids = append(ids, id)
 	}
-	drugCur, err := h.db.Drugs().Find(ctx, bson.M{"_id": bson.M{"$in": ids}},
+	drugCur, err := mdb.Drugs().Find(ctx, bson.M{"_id": bson.M{"$in": ids}},
 		options.Find().SetProjection(bson.M{"_id": 1, "name": 1}),
 	)
 	nameMap := map[bson.ObjectID]string{}
@@ -226,6 +242,11 @@ func (h *DrugLotHandler) WriteoffLots(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
@@ -237,12 +258,12 @@ func (h *DrugLotHandler) WriteoffLots(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var lot models.DrugLot
-		if err := h.db.DrugLots().FindOneAndDelete(ctx, bson.M{"_id": lotOID}).Decode(&lot); err != nil {
+		if err := mdb.DrugLots().FindOneAndDelete(ctx, bson.M{"_id": lotOID}).Decode(&lot); err != nil {
 			continue // not found or already deleted — skip
 		}
 
 		if lot.Remaining > 0 {
-			h.db.Drugs().UpdateOne(ctx,
+			mdb.Drugs().UpdateOne(ctx,
 				bson.M{"_id": lot.DrugID},
 				bson.M{"$inc": bson.M{"stock": -lot.Remaining}},
 			)
@@ -250,8 +271,8 @@ func (h *DrugLotHandler) WriteoffLots(w http.ResponseWriter, r *http.Request) {
 
 		// Audit log — lookup drug name then record the write-off
 		var drug models.Drug
-		h.db.Drugs().FindOne(ctx, bson.M{"_id": lot.DrugID}).Decode(&drug)
-		h.db.LotWriteoffs().InsertOne(ctx, models.LotWriteoff{
+		mdb.Drugs().FindOne(ctx, bson.M{"_id": lot.DrugID}).Decode(&drug)
+		mdb.LotWriteoffs().InsertOne(ctx, models.LotWriteoff{
 			ID:         bson.NewObjectID(),
 			DrugID:     lot.DrugID,
 			DrugName:   drug.Name,
@@ -283,19 +304,24 @@ func (h *DrugLotHandler) DeleteLot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
 	// Fetch lot to get remaining quantity before deleting
 	var lot models.DrugLot
-	err = h.db.DrugLots().FindOne(ctx, bson.M{"_id": lotOID, "drug_id": drugOID}).Decode(&lot)
+	err = mdb.DrugLots().FindOne(ctx, bson.M{"_id": lotOID, "drug_id": drugOID}).Decode(&lot)
 	if err != nil {
 		jsonError(w, "lot not found", http.StatusNotFound)
 		return
 	}
 
 	// Delete the lot
-	_, err = h.db.DrugLots().DeleteOne(ctx, bson.M{"_id": lotOID})
+	_, err = mdb.DrugLots().DeleteOne(ctx, bson.M{"_id": lotOID})
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -303,7 +329,7 @@ func (h *DrugLotHandler) DeleteLot(w http.ResponseWriter, r *http.Request) {
 
 	// Decrement drug.stock by the remaining qty (not original quantity)
 	if lot.Remaining > 0 {
-		h.db.Drugs().UpdateOne(ctx,
+		mdb.Drugs().UpdateOne(ctx,
 			bson.M{"_id": drugOID},
 			bson.M{"$inc": bson.M{"stock": -lot.Remaining}},
 		)

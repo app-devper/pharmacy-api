@@ -18,12 +18,13 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
+	mw "pharmacy-pos/backend/middleware"
 	"pharmacy-pos/backend/models"
 )
 
-type SaleHandler struct{ db *db.MongoDB }
+type SaleHandler struct{ dbm *db.Manager }
 
-func NewSaleHandler(d *db.MongoDB) *SaleHandler { return &SaleHandler{db: d} }
+func NewSaleHandler(d *db.Manager) *SaleHandler { return &SaleHandler{dbm: d} }
 
 var errSaleAlreadyVoided = errors.New("sale already voided")
 
@@ -73,10 +74,15 @@ func (h *SaleHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	cur, err := h.db.Sales().Find(ctx, filter,
+	cur, err := mdb.Sales().Find(ctx, filter,
 		options.Find().SetSort(bson.D{{Key: "sold_at", Value: -1}}).SetLimit(limit),
 	)
 	if err != nil {
@@ -107,10 +113,15 @@ func (h *SaleHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	preparedItems, subtotal, err := h.prepareSaleItems(ctx, input.Items)
+	preparedItems, subtotal, err := h.prepareSaleItems(ctx, mdb, input.Items)
 	if err != nil {
 		if errors.Is(err, bson.ErrInvalidHex) {
 			jsonError(w, "invalid drug id", http.StatusBadRequest)
@@ -124,7 +135,7 @@ func (h *SaleHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	customerID, customerName, err := h.resolveSaleCustomer(ctx, input.CustomerID)
+	customerID, customerName, err := h.resolveSaleCustomer(ctx, mdb, input.CustomerID)
 	if err != nil {
 		if errors.Is(err, bson.ErrInvalidHex) || errors.Is(err, mongo.ErrNoDocuments) {
 			jsonError(w, "customer not found", http.StatusBadRequest)
@@ -147,9 +158,9 @@ func (h *SaleHandler) Create(w http.ResponseWriter, r *http.Request) {
 	change := math.Max(0, received-total)
 
 	var billNo string
-	if err := h.db.WithTransaction(ctx, func(txCtx context.Context) error {
+	if err := mdb.WithTransaction(ctx, func(txCtx context.Context) error {
 		now := time.Now()
-		generatedBillNo, err := h.nextSaleBillNo(txCtx, now)
+		generatedBillNo, err := h.nextSaleBillNo(txCtx, mdb, now)
 		if err != nil {
 			return err
 		}
@@ -164,20 +175,20 @@ func (h *SaleHandler) Create(w http.ResponseWriter, r *http.Request) {
 			Change:       change,
 			SoldAt:       now,
 		}
-		res, err := h.db.Sales().InsertOne(txCtx, sale)
+		res, err := mdb.Sales().InsertOne(txCtx, sale)
 		if err != nil {
 			return err
 		}
 		saleOID := res.InsertedID.(bson.ObjectID)
 
 		for _, item := range preparedItems {
-			if err := h.applySaleItem(txCtx, saleOID, item); err != nil {
+			if err := h.applySaleItem(txCtx, mdb, saleOID, item); err != nil {
 				return err
 			}
 		}
 
 		if customerID != nil {
-			if _, err := h.db.Customers().UpdateOne(txCtx,
+			if _, err := mdb.Customers().UpdateOne(txCtx,
 				bson.M{"_id": customerID},
 				bson.M{
 					"$inc": bson.M{"total_spent": total},
@@ -203,7 +214,7 @@ func (h *SaleHandler) Create(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, models.SaleResponse{BillNo: billNo, Discount: discount, Total: total, Change: change})
 }
 
-func (h *SaleHandler) prepareSaleItems(ctx context.Context, inputs []models.SaleItemInput) ([]preparedSaleItem, float64, error) {
+func (h *SaleHandler) prepareSaleItems(ctx context.Context, mdb *db.MongoDB, inputs []models.SaleItemInput) ([]preparedSaleItem, float64, error) {
 	items := make([]preparedSaleItem, 0, len(inputs))
 	requiredByDrug := make(map[bson.ObjectID]int)
 	var subtotal float64
@@ -222,7 +233,7 @@ func (h *SaleHandler) prepareSaleItems(ctx context.Context, inputs []models.Sale
 		}
 
 		var drug models.Drug
-		if err := h.db.Drugs().FindOne(ctx, bson.M{"_id": drugID}).Decode(&drug); err != nil {
+		if err := mdb.Drugs().FindOne(ctx, bson.M{"_id": drugID}).Decode(&drug); err != nil {
 			return nil, 0, err
 		}
 		subtotal += input.Price * float64(input.Qty)
@@ -237,7 +248,7 @@ func (h *SaleHandler) prepareSaleItems(ctx context.Context, inputs []models.Sale
 	}
 
 	for drugID, need := range requiredByDrug {
-		if err := h.ensureSaleInventoryAvailable(ctx, drugID, need); err != nil {
+		if err := h.ensureSaleInventoryAvailable(ctx, mdb, drugID, need); err != nil {
 			return nil, 0, err
 		}
 	}
@@ -245,16 +256,16 @@ func (h *SaleHandler) prepareSaleItems(ctx context.Context, inputs []models.Sale
 	return items, subtotal, nil
 }
 
-func (h *SaleHandler) ensureSaleInventoryAvailable(ctx context.Context, drugID bson.ObjectID, need int) error {
+func (h *SaleHandler) ensureSaleInventoryAvailable(ctx context.Context, mdb *db.MongoDB, drugID bson.ObjectID, need int) error {
 	var drug models.Drug
-	if err := h.db.Drugs().FindOne(ctx, bson.M{"_id": drugID}).Decode(&drug); err != nil {
+	if err := mdb.Drugs().FindOne(ctx, bson.M{"_id": drugID}).Decode(&drug); err != nil {
 		return err
 	}
 	if drug.Stock < need {
 		return fmt.Errorf("insufficient stock for %s", drug.Name)
 	}
 
-	cur, err := h.db.DrugLots().Find(ctx,
+	cur, err := mdb.DrugLots().Find(ctx,
 		bson.M{"drug_id": drugID, "remaining": bson.M{"$gt": 0}},
 		options.Find().SetSort(bson.D{{Key: "expiry_date", Value: 1}}),
 	)
@@ -282,7 +293,7 @@ func (h *SaleHandler) ensureSaleInventoryAvailable(ctx context.Context, drugID b
 	return nil
 }
 
-func (h *SaleHandler) resolveSaleCustomer(ctx context.Context, customerID *string) (*bson.ObjectID, string, error) {
+func (h *SaleHandler) resolveSaleCustomer(ctx context.Context, mdb *db.MongoDB, customerID *string) (*bson.ObjectID, string, error) {
 	if customerID == nil || *customerID == "" {
 		return nil, "", nil
 	}
@@ -293,19 +304,19 @@ func (h *SaleHandler) resolveSaleCustomer(ctx context.Context, customerID *strin
 	}
 
 	var customer models.Customer
-	if err := h.db.Customers().FindOne(ctx, bson.M{"_id": oid}).Decode(&customer); err != nil {
+	if err := mdb.Customers().FindOne(ctx, bson.M{"_id": oid}).Decode(&customer); err != nil {
 		return nil, "", err
 	}
 	return &oid, customer.Name, nil
 }
 
-func (h *SaleHandler) nextSaleBillNo(ctx context.Context, now time.Time) (string, error) {
+func (h *SaleHandler) nextSaleBillNo(ctx context.Context, mdb *db.MongoDB, now time.Time) (string, error) {
 	today := now.Format("060102")
 	counterID := "INV-" + today
 	var counter struct {
 		Seq int `bson:"seq"`
 	}
-	err := h.db.Counters().FindOneAndUpdate(ctx,
+	err := mdb.Counters().FindOneAndUpdate(ctx,
 		bson.M{"_id": counterID},
 		bson.M{"$inc": bson.M{"seq": 1}},
 		options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.After),
@@ -316,8 +327,8 @@ func (h *SaleHandler) nextSaleBillNo(ctx context.Context, now time.Time) (string
 	return fmt.Sprintf("INV-%s-%03d", today, counter.Seq), nil
 }
 
-func (h *SaleHandler) applySaleItem(ctx context.Context, saleID bson.ObjectID, item preparedSaleItem) error {
-	updateResult, err := h.db.Drugs().UpdateOne(ctx,
+func (h *SaleHandler) applySaleItem(ctx context.Context, mdb *db.MongoDB, saleID bson.ObjectID, item preparedSaleItem) error {
+	updateResult, err := mdb.Drugs().UpdateOne(ctx,
 		bson.M{"_id": item.DrugID, "stock": bson.M{"$gte": item.Qty}},
 		bson.M{"$inc": bson.M{"stock": -item.Qty}},
 	)
@@ -336,11 +347,11 @@ func (h *SaleHandler) applySaleItem(ctx context.Context, saleID bson.ObjectID, i
 		Price:    item.Price,
 		Subtotal: item.Subtotal,
 	}
-	if _, err := h.db.SaleItems().InsertOne(ctx, si); err != nil {
+	if _, err := mdb.SaleItems().InsertOne(ctx, si); err != nil {
 		return err
 	}
 
-	lotCur, err := h.db.DrugLots().Find(ctx,
+	lotCur, err := mdb.DrugLots().Find(ctx,
 		bson.M{"drug_id": item.DrugID, "remaining": bson.M{"$gt": 0}},
 		options.Find().SetSort(bson.D{{Key: "expiry_date", Value: 1}}),
 	)
@@ -364,7 +375,7 @@ func (h *SaleHandler) applySaleItem(ctx context.Context, saleID bson.ObjectID, i
 		if deduct > need {
 			deduct = need
 		}
-		res, err := h.db.DrugLots().UpdateOne(ctx,
+		res, err := mdb.DrugLots().UpdateOne(ctx,
 			bson.M{"_id": lot.ID, "remaining": bson.M{"$gte": deduct}},
 			bson.M{"$inc": bson.M{"remaining": -deduct}},
 		)
@@ -391,10 +402,15 @@ func (h *SaleHandler) Items(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	cur, err := h.db.SaleItems().Find(ctx, bson.M{"sale_id": oid})
+	cur, err := mdb.SaleItems().Find(ctx, bson.M{"sale_id": oid})
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -429,12 +445,17 @@ func (h *SaleHandler) Void(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
 	// Fetch sale
 	var sale models.Sale
-	if err := h.db.Sales().FindOne(ctx, bson.M{"_id": oid}).Decode(&sale); err != nil {
+	if err := mdb.Sales().FindOne(ctx, bson.M{"_id": oid}).Decode(&sale); err != nil {
 		jsonError(w, "sale not found", http.StatusNotFound)
 		return
 	}
@@ -443,9 +464,9 @@ func (h *SaleHandler) Void(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.db.WithTransaction(ctx, func(txCtx context.Context) error {
+	if err := mdb.WithTransaction(ctx, func(txCtx context.Context) error {
 		now := time.Now()
-		updateRes, err := h.db.Sales().UpdateOne(txCtx,
+		updateRes, err := mdb.Sales().UpdateOne(txCtx,
 			bson.M{"_id": oid, "voided": bson.M{"$ne": true}},
 			bson.M{"$set": bson.M{
 				"voided":      true,
@@ -460,7 +481,7 @@ func (h *SaleHandler) Void(w http.ResponseWriter, r *http.Request) {
 			return errSaleAlreadyVoided
 		}
 
-		itemCur, err := h.db.SaleItems().Find(txCtx, bson.M{"sale_id": oid})
+		itemCur, err := mdb.SaleItems().Find(txCtx, bson.M{"sale_id": oid})
 		if err != nil {
 			return err
 		}
@@ -472,20 +493,20 @@ func (h *SaleHandler) Void(w http.ResponseWriter, r *http.Request) {
 		}
 
 		for _, item := range items {
-			if _, err := h.db.Drugs().UpdateOne(txCtx,
+			if _, err := mdb.Drugs().UpdateOne(txCtx,
 				bson.M{"_id": item.DrugID},
 				bson.M{"$inc": bson.M{"stock": item.Qty}},
 			); err != nil {
 				return err
 			}
 
-			if err := h.restoreSaleItemLots(txCtx, item); err != nil {
+			if err := h.restoreSaleItemLots(txCtx, mdb, item); err != nil {
 				return err
 			}
 		}
 
 		if sale.CustomerID != nil {
-			if _, err := h.db.Customers().UpdateOne(txCtx,
+			if _, err := mdb.Customers().UpdateOne(txCtx,
 				bson.M{"_id": sale.CustomerID},
 				bson.M{"$inc": bson.M{"total_spent": -sale.Total}},
 			); err != nil {
@@ -506,8 +527,8 @@ func (h *SaleHandler) Void(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]bool{"ok": true})
 }
 
-func (h *SaleHandler) restoreSaleItemLots(ctx context.Context, item models.SaleItem) error {
-	lotCur, err := h.db.DrugLots().Find(ctx,
+func (h *SaleHandler) restoreSaleItemLots(ctx context.Context, mdb *db.MongoDB, item models.SaleItem) error {
+	lotCur, err := mdb.DrugLots().Find(ctx,
 		bson.M{"drug_id": item.DrugID},
 		options.Find().SetSort(bson.D{{Key: "expiry_date", Value: -1}}),
 	)
@@ -537,7 +558,7 @@ func (h *SaleHandler) restoreSaleItemLots(ctx context.Context, item models.SaleI
 			restore = need
 		}
 
-		res, err := h.db.DrugLots().UpdateOne(ctx,
+		res, err := mdb.DrugLots().UpdateOne(ctx,
 			bson.M{"_id": lot.ID, "remaining": bson.M{"$lte": lot.Quantity - restore}},
 			bson.M{"$inc": bson.M{"remaining": restore}},
 		)

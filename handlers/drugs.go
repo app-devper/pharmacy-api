@@ -11,18 +11,24 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
+	mw "pharmacy-pos/backend/middleware"
 	"pharmacy-pos/backend/models"
 )
 
-type DrugHandler struct{ db *db.MongoDB }
+type DrugHandler struct{ dbm *db.Manager }
 
-func NewDrugHandler(d *db.MongoDB) *DrugHandler { return &DrugHandler{db: d} }
+func NewDrugHandler(d *db.Manager) *DrugHandler { return &DrugHandler{dbm: d} }
 
 func (h *DrugHandler) List(w http.ResponseWriter, r *http.Request) {
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	cur, err := h.db.Drugs().Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
+	cur, err := mdb.Drugs().Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -57,6 +63,11 @@ func (h *DrugHandler) Add(w http.ResponseWriter, r *http.Request) {
 		input.Unit = "เม็ด"
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
@@ -78,7 +89,7 @@ func (h *DrugHandler) Add(w http.ResponseWriter, r *http.Request) {
 		ReportTypes: input.ReportTypes,
 		CreatedAt:   time.Now(),
 	}
-	res, err := h.db.Drugs().InsertOne(ctx, drug)
+	res, err := mdb.Drugs().InsertOne(ctx, drug)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -105,10 +116,15 @@ func (h *DrugHandler) Update(w http.ResponseWriter, r *http.Request) {
 		input.ReportTypes = []string{}
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	_, err = h.db.Drugs().UpdateOne(ctx,
+	_, err = mdb.Drugs().UpdateOne(ctx,
 		bson.M{"_id": oid},
 		bson.M{"$set": bson.M{
 			"name":         input.Name,
@@ -134,10 +150,15 @@ func (h *DrugHandler) Update(w http.ResponseWriter, r *http.Request) {
 // LowStock returns drugs where min_stock > 0 AND stock <= min_stock, sorted by stock ASC.
 // GET /api/drugs/low-stock
 func (h *DrugHandler) LowStock(w http.ResponseWriter, r *http.Request) {
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	cur, err := h.db.Drugs().Find(ctx,
+	cur, err := mdb.Drugs().Find(ctx,
 		bson.M{"$expr": bson.M{
 			"$and": bson.A{
 				bson.M{"$gt": bson.A{"$min_stock", 0}},

@@ -15,12 +15,13 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
+	mw "pharmacy-pos/backend/middleware"
 	"pharmacy-pos/backend/models"
 )
 
-type ImportHandler struct{ db *db.MongoDB }
+type ImportHandler struct{ dbm *db.Manager }
 
-func NewImportHandler(d *db.MongoDB) *ImportHandler { return &ImportHandler{db: d} }
+func NewImportHandler(d *db.Manager) *ImportHandler { return &ImportHandler{dbm: d} }
 
 type importLogEntry struct {
 	DocNo     string
@@ -31,6 +32,11 @@ type importLogEntry struct {
 
 // List returns all purchase orders (summary only, items excluded).
 func (h *ImportHandler) List(w http.ResponseWriter, r *http.Request) {
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
@@ -39,7 +45,7 @@ func (h *ImportHandler) List(w http.ResponseWriter, r *http.Request) {
 		filter["supplier"] = s
 	}
 
-	cur, err := h.db.PurchaseOrders().Find(ctx, filter,
+	cur, err := mdb.PurchaseOrders().Find(ctx, filter,
 		options.Find().
 			SetSort(bson.D{{Key: "created_at", Value: -1}}).
 			SetLimit(200).
@@ -71,11 +77,16 @@ func (h *ImportHandler) GetOne(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
 	var po models.PurchaseOrder
-	if err := h.db.PurchaseOrders().FindOne(ctx, bson.M{"_id": oid}).Decode(&po); err != nil {
+	if err := mdb.PurchaseOrders().FindOne(ctx, bson.M{"_id": oid}).Decode(&po); err != nil {
 		jsonError(w, "not found", http.StatusNotFound)
 		return
 	}
@@ -90,6 +101,11 @@ func (h *ImportHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
@@ -100,7 +116,7 @@ func (h *ImportHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var counter struct {
 		Seq int `bson:"seq"`
 	}
-	err := h.db.Counters().FindOneAndUpdate(ctx,
+	err = mdb.Counters().FindOneAndUpdate(ctx,
 		bson.M{"_id": counterID},
 		bson.M{"$inc": bson.M{"seq": 1}},
 		options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.After),
@@ -118,7 +134,7 @@ func (h *ImportHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	items, totalCost, err := h.buildItems(ctx, input.Items)
+	items, totalCost, err := h.buildItems(ctx, mdb, input.Items)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
@@ -137,7 +153,7 @@ func (h *ImportHandler) Create(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:   now,
 	}
 
-	res, err := h.db.PurchaseOrders().InsertOne(ctx, po)
+	res, err := mdb.PurchaseOrders().InsertOne(ctx, po)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -161,12 +177,17 @@ func (h *ImportHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
 	// Guard: can only update drafts
 	var existing models.PurchaseOrder
-	if err := h.db.PurchaseOrders().FindOne(ctx, bson.M{"_id": oid}).Decode(&existing); err != nil {
+	if err := mdb.PurchaseOrders().FindOne(ctx, bson.M{"_id": oid}).Decode(&existing); err != nil {
 		jsonError(w, "not found", http.StatusNotFound)
 		return
 	}
@@ -182,13 +203,13 @@ func (h *ImportHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	items, totalCost, err := h.buildItems(ctx, input.Items)
+	items, totalCost, err := h.buildItems(ctx, mdb, input.Items)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	_, err = h.db.PurchaseOrders().UpdateOne(ctx, bson.M{"_id": oid},
+	_, err = mdb.PurchaseOrders().UpdateOne(ctx, bson.M{"_id": oid},
 		bson.M{"$set": bson.M{
 			"supplier":     input.Supplier,
 			"invoice_no":   input.InvoiceNo,
@@ -223,11 +244,16 @@ func (h *ImportHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
 	var po models.PurchaseOrder
-	if err := h.db.PurchaseOrders().FindOne(ctx, bson.M{"_id": oid}).Decode(&po); err != nil {
+	if err := mdb.PurchaseOrders().FindOne(ctx, bson.M{"_id": oid}).Decode(&po); err != nil {
 		jsonError(w, "not found", http.StatusNotFound)
 		return
 	}
@@ -257,7 +283,7 @@ func (h *ImportHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var logEntries []importLogEntry
-	if err := h.db.WithTransaction(ctx, func(txCtx context.Context) error {
+	if err := mdb.WithTransaction(ctx, func(txCtx context.Context) error {
 		now := time.Now()
 		receiveDate := po.ReceiveDate.Format("2006-01-02")
 		attemptLogs := make([]importLogEntry, 0, len(po.Items))
@@ -277,11 +303,11 @@ func (h *ImportHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 				Remaining:  item.Qty,
 				CreatedAt:  now,
 			}
-			if _, err := h.db.DrugLots().InsertOne(txCtx, lot); err != nil {
+			if _, err := mdb.DrugLots().InsertOne(txCtx, lot); err != nil {
 				return fmt.Errorf("lot insert failed for %s: %w", item.DrugName, err)
 			}
 
-			stockRes, err := h.db.Drugs().UpdateOne(txCtx,
+			stockRes, err := mdb.Drugs().UpdateOne(txCtx,
 				bson.M{"_id": item.DrugID},
 				bson.M{"$inc": bson.M{"stock": item.Qty}},
 			)
@@ -293,7 +319,7 @@ func (h *ImportHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 			}
 
 			var drug models.Drug
-			if err := h.db.Drugs().FindOne(txCtx, bson.M{"_id": item.DrugID}).Decode(&drug); err != nil {
+			if err := mdb.Drugs().FindOne(txCtx, bson.M{"_id": item.DrugID}).Decode(&drug); err != nil {
 				return fmt.Errorf("drug lookup failed for %s: %w", item.DrugName, err)
 			}
 
@@ -309,7 +335,7 @@ func (h *ImportHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 				InvoiceNo:    po.InvoiceNo,
 				CreatedAt:    now,
 			}
-			if _, err := h.db.Ky9().InsertOne(txCtx, ky9); err != nil {
+			if _, err := mdb.Ky9().InsertOne(txCtx, ky9); err != nil {
 				return fmt.Errorf("ky9 insert failed for %s: %w", item.DrugName, err)
 			}
 
@@ -321,7 +347,7 @@ func (h *ImportHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 
-		updateRes, err := h.db.PurchaseOrders().UpdateOne(txCtx,
+		updateRes, err := mdb.PurchaseOrders().UpdateOne(txCtx,
 			bson.M{"_id": oid, "status": "draft"},
 			bson.M{"$set": bson.M{"status": "confirmed", "confirmed_at": now}},
 		)
@@ -359,11 +385,16 @@ func (h *ImportHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
 	var po models.PurchaseOrder
-	if err := h.db.PurchaseOrders().FindOne(ctx, bson.M{"_id": oid}).Decode(&po); err != nil {
+	if err := mdb.PurchaseOrders().FindOne(ctx, bson.M{"_id": oid}).Decode(&po); err != nil {
 		jsonError(w, "not found", http.StatusNotFound)
 		return
 	}
@@ -372,13 +403,13 @@ func (h *ImportHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.db.PurchaseOrders().DeleteOne(ctx, bson.M{"_id": oid})
+	mdb.PurchaseOrders().DeleteOne(ctx, bson.M{"_id": oid})
 	jsonOK(w, map[string]bool{"ok": true})
 }
 
 // buildItems converts POItemInput slice to POItem slice and computes totalCost.
 // Looks up drug name from DB if DrugName is empty.
-func (h *ImportHandler) buildItems(ctx context.Context, inputs []models.POItemInput) ([]models.POItem, float64, error) {
+func (h *ImportHandler) buildItems(ctx context.Context, mdb *db.MongoDB, inputs []models.POItemInput) ([]models.POItem, float64, error) {
 	if len(inputs) == 0 {
 		return nil, 0, fmt.Errorf("items is required")
 	}
@@ -399,7 +430,7 @@ func (h *ImportHandler) buildItems(ctx context.Context, inputs []models.POItemIn
 		}
 
 		var drug models.Drug
-		if err := h.db.Drugs().FindOne(ctx, bson.M{"_id": oid}).Decode(&drug); err != nil {
+		if err := mdb.Drugs().FindOne(ctx, bson.M{"_id": oid}).Decode(&drug); err != nil {
 			return nil, 0, err
 		}
 

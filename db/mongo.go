@@ -2,7 +2,10 @@ package db
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"regexp"
+	"sync"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -12,13 +15,33 @@ import (
 	"pharmacy-pos/backend/models"
 )
 
+// validClientID allows only alphanumeric, underscore, and hyphen characters.
+var validClientID = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+// MongoDB wraps a single database instance and its collections.
 type MongoDB struct {
 	client               *mongo.Client
 	db                   *mongo.Database
 	supportsTransactions bool
 }
 
-func Connect(uri, dbName string) *MongoDB {
+type tenantDB struct {
+	db       *MongoDB
+	initOnce sync.Once
+}
+
+// Manager holds one mongo.Client and a per-clientId database cache.
+// DB name: clientId "000" → dbPrefix (e.g. "pharmacy"); others → "<dbPrefix>_<clientId>" (e.g. "pharmacy_abc").
+type Manager struct {
+	client               *mongo.Client
+	dbPrefix             string
+	supportsTransactions bool
+	cache                sync.Map // map[clientId string]*tenantDB
+}
+
+// NewManager connects to MongoDB and returns a Manager.
+// Use Manager.ForClient(clientId) to get a per-tenant *MongoDB.
+func NewManager(uri, dbPrefix string) *Manager {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -30,8 +53,10 @@ func Connect(uri, dbName string) *MongoDB {
 	if err := client.Ping(ctx, nil); err != nil {
 		log.Fatalf("MongoDB ping error: %v", err)
 	}
-	database := client.Database(dbName)
-	supportsTransactions, err := detectTransactionSupport(ctx, database)
+
+	// Detect transaction support using the default DB
+	probe := client.Database(dbPrefix)
+	supportsTransactions, err := detectTransactionSupport(ctx, probe)
 	if err != nil {
 		log.Printf("MongoDB transaction capability check failed: %v", err)
 	}
@@ -39,7 +64,99 @@ func Connect(uri, dbName string) *MongoDB {
 	if !supportsTransactions {
 		log.Println("MongoDB transactions unavailable; falling back to non-transactional writes")
 	}
-	return &MongoDB{client: client, db: database, supportsTransactions: supportsTransactions}
+	return &Manager{
+		client:               client,
+		dbPrefix:             dbPrefix,
+		supportsTransactions: supportsTransactions,
+	}
+}
+
+// ForClient returns (and caches) a *MongoDB for the given clientId.
+// Special case: clientId "000" → database = dbPrefix (e.g. "pharmacy")
+// All other clientIds          → database = "<dbPrefix>_<clientId>" (e.g. "pharmacy_abc")
+// Returns an error if clientID is empty or contains illegal characters.
+func (m *Manager) ForClient(clientID string) (*MongoDB, error) {
+	if clientID == "" {
+		return nil, fmt.Errorf("clientId is required")
+	}
+	if clientID != "000" && !validClientID.MatchString(clientID) {
+		return nil, fmt.Errorf("invalid clientId %q", clientID)
+	}
+
+	if v, ok := m.cache.Load(clientID); ok {
+		entry := v.(*tenantDB)
+		entry.ensureInitialized(clientID)
+		return entry.db, nil
+	}
+
+	var dbName string
+	if clientID == "000" {
+		dbName = m.dbPrefix // "pharmacy"
+	} else {
+		dbName = fmt.Sprintf("%s_%s", m.dbPrefix, clientID) // "pharmacy_abc"
+	}
+	d := &MongoDB{
+		client:               m.client,
+		db:                   m.client.Database(dbName),
+		supportsTransactions: m.supportsTransactions,
+	}
+	entry := &tenantDB{db: d}
+	actual, _ := m.cache.LoadOrStore(clientID, entry)
+	entry = actual.(*tenantDB)
+	entry.ensureInitialized(clientID)
+	return entry.db, nil
+}
+
+// forClientNoInit returns a *MongoDB without running tenant initialization.
+// Used internally for bootstrap paths that manage initialization explicitly.
+func (m *Manager) forClientNoInit(clientID string) (*MongoDB, error) {
+	if clientID == "" {
+		return nil, fmt.Errorf("clientId is required")
+	}
+	if clientID != "000" && !validClientID.MatchString(clientID) {
+		return nil, fmt.Errorf("invalid clientId %q", clientID)
+	}
+	var dbName string
+	if clientID == "000" {
+		dbName = m.dbPrefix
+	} else {
+		dbName = fmt.Sprintf("%s_%s", m.dbPrefix, clientID)
+	}
+	return &MongoDB{
+		client:               m.client,
+		db:                   m.client.Database(dbName),
+		supportsTransactions: m.supportsTransactions,
+	}, nil
+}
+
+// CreateIndexesForClient creates indexes on the given clientId's database.
+// Returns an error so callers (e.g. bootstrap) can fail fast.
+func (m *Manager) CreateIndexesForClient(ctx context.Context, clientID string) error {
+	d, err := m.forClientNoInit(clientID)
+	if err != nil {
+		return err
+	}
+	if err := d.CreateIndexes(ctx); err != nil {
+		return err
+	}
+	// Mark the tenant as initialized in the cache so request-path callers
+	// don't re-run CreateIndexes.
+	entry := &tenantDB{db: d}
+	entry.initOnce.Do(func() {
+		log.Printf("Opened database %q for client %q", d.db.Name(), clientID)
+	})
+	m.cache.LoadOrStore(clientID, entry)
+	return nil
+}
+
+// SeedForClient seeds initial data on the given clientId's database (no-op if already seeded).
+func (m *Manager) SeedForClient(ctx context.Context, clientID string) error {
+	d, err := m.forClientNoInit(clientID)
+	if err != nil {
+		return err
+	}
+	d.Seed(ctx)
+	return nil
 }
 
 func (m *MongoDB) WithTransaction(ctx context.Context, fn func(context.Context) error) error {
@@ -86,50 +203,86 @@ func (m *MongoDB) StockAdjustments() *mongo.Collection { return m.db.Collection(
 func (m *MongoDB) DrugReturns() *mongo.Collection      { return m.db.Collection("drug_returns") }
 func (m *MongoDB) LotWriteoffs() *mongo.Collection     { return m.db.Collection("lot_writeoffs") }
 
-func (m *MongoDB) CreateIndexes(ctx context.Context) {
+// ensureInitialized runs index creation for a tenant exactly once, best-effort.
+// Errors are logged but never propagated, so a single bad index (e.g. a unique
+// constraint violation on legacy data) cannot block the tenant's API.
+// Bootstrap paths that want fail-fast behavior should call Manager.CreateIndexesForClient instead.
+func (t *tenantDB) ensureInitialized(clientID string) {
+	t.initOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := t.db.CreateIndexes(ctx); err != nil {
+			log.Printf("tenant %q: index creation reported error (continuing): %v", clientID, err)
+		}
+		log.Printf("Opened database %q for client %q", t.db.db.Name(), clientID)
+	})
+}
+
+func (m *MongoDB) CreateIndexes(ctx context.Context) error {
 	// Unique index on sales.bill_no
-	m.Sales().Indexes().CreateOne(ctx, mongo.IndexModel{
+	if _, err := m.Sales().Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "bill_no", Value: 1}},
 		Options: options.Index().SetUnique(true),
-	})
+	}); err != nil {
+		return err
+	}
 	// Index on sale_items.sale_id
-	m.SaleItems().Indexes().CreateOne(ctx, mongo.IndexModel{
+	if _, err := m.SaleItems().Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "sale_id", Value: 1}},
-	})
+	}); err != nil {
+		return err
+	}
 	// Index on ky forms date
 	for _, col := range []*mongo.Collection{m.Ky9(), m.Ky10(), m.Ky11(), m.Ky12()} {
-		col.Indexes().CreateOne(ctx, mongo.IndexModel{
+		if _, err := col.Indexes().CreateOne(ctx, mongo.IndexModel{
 			Keys: bson.D{{Key: "date", Value: 1}},
-		})
+		}); err != nil {
+			return err
+		}
 	}
 	// Indexes on drug_lots
-	m.DrugLots().Indexes().CreateOne(ctx, mongo.IndexModel{
+	if _, err := m.DrugLots().Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "drug_id", Value: 1}},
-	})
-	m.DrugLots().Indexes().CreateOne(ctx, mongo.IndexModel{
+	}); err != nil {
+		return err
+	}
+	if _, err := m.DrugLots().Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "expiry_date", Value: 1}},
-	})
+	}); err != nil {
+		return err
+	}
 	// Indexes on purchase_orders
-	m.PurchaseOrders().Indexes().CreateOne(ctx, mongo.IndexModel{
+	if _, err := m.PurchaseOrders().Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "created_at", Value: -1}},
-	})
-	m.PurchaseOrders().Indexes().CreateOne(ctx, mongo.IndexModel{
+	}); err != nil {
+		return err
+	}
+	if _, err := m.PurchaseOrders().Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "doc_no", Value: 1}},
 		Options: options.Index().SetUnique(true),
-	})
+	}); err != nil {
+		return err
+	}
 	// Unique index on suppliers.name
-	m.Suppliers().Indexes().CreateOne(ctx, mongo.IndexModel{
+	if _, err := m.Suppliers().Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "name", Value: 1}},
 		Options: options.Index().SetUnique(true),
-	})
+	}); err != nil {
+		return err
+	}
 	// Compound index on stock_adjustments: drug_id + created_at DESC
-	m.StockAdjustments().Indexes().CreateOne(ctx, mongo.IndexModel{
+	if _, err := m.StockAdjustments().Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "drug_id", Value: 1}, {Key: "created_at", Value: -1}},
-	})
+	}); err != nil {
+		return err
+	}
 	// Index on drug_returns.sale_id
-	m.DrugReturns().Indexes().CreateOne(ctx, mongo.IndexModel{
+	if _, err := m.DrugReturns().Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "sale_id", Value: 1}},
-	})
+	}); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (m *MongoDB) Seed(ctx context.Context) {
