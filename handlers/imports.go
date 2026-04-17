@@ -294,6 +294,7 @@ func (h *ImportHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 
 			lot := models.DrugLot{
 				DrugID:     item.DrugID,
+				DrugName:   item.DrugName,
 				LotNumber:  item.LotNumber,
 				ExpiryDate: expiry,
 				ImportDate: po.ReceiveDate,
@@ -434,9 +435,9 @@ func (h *ImportHandler) buildItems(ctx context.Context, mdb *db.MongoDB, inputs 
 			return nil, 0, err
 		}
 
-		name := inp.DrugName
-		if name == "" {
-			name = drug.Name
+		name := drug.Name
+		if inp.DrugName != "" {
+			name = inp.DrugName
 		}
 
 		sellPrice := inp.SellPrice

@@ -20,12 +20,13 @@ type DrugReturn struct {
 }
 
 type ReturnItem struct {
-	SaleItemID bson.ObjectID `bson:"sale_item_id" json:"sale_item_id"`
-	DrugID     bson.ObjectID `bson:"drug_id"      json:"drug_id"`
-	DrugName   string        `bson:"drug_name"    json:"drug_name"`
-	Qty        int           `bson:"qty"          json:"qty"`
-	Price      float64       `bson:"price"        json:"price"`
-	Subtotal   float64       `bson:"subtotal"     json:"subtotal"`
+	SaleItemID   bson.ObjectID `bson:"sale_item_id" json:"sale_item_id"`
+	DrugID       bson.ObjectID `bson:"drug_id"      json:"drug_id"`
+	DrugName     string        `bson:"drug_name"    json:"drug_name"`
+	Qty          int           `bson:"qty"          json:"qty"`
+	Price        float64       `bson:"price"        json:"price"`
+	Subtotal     float64       `bson:"subtotal"     json:"subtotal"`
+	CostSubtotal float64       `bson:"cost_subtotal" json:"cost_subtotal"`
 }
 
 type DrugReturnInput struct {

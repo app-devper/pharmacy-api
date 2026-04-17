@@ -29,11 +29,12 @@ func NewSaleHandler(d *db.Manager) *SaleHandler { return &SaleHandler{dbm: d} }
 var errSaleAlreadyVoided = errors.New("sale already voided")
 
 type preparedSaleItem struct {
-	Drug     models.Drug
-	DrugID   bson.ObjectID
-	Qty      int
-	Price    float64
-	Subtotal float64
+	Drug         models.Drug
+	DrugID       bson.ObjectID
+	Qty          int
+	Price        float64
+	Subtotal     float64
+	CostSubtotal float64
 }
 
 func (h *SaleHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -339,18 +340,6 @@ func (h *SaleHandler) applySaleItem(ctx context.Context, mdb *db.MongoDB, saleID
 		return fmt.Errorf("insufficient stock for %s", item.Drug.Name)
 	}
 
-	si := models.SaleItem{
-		SaleID:   saleID,
-		DrugID:   item.DrugID,
-		DrugName: item.Drug.Name,
-		Qty:      item.Qty,
-		Price:    item.Price,
-		Subtotal: item.Subtotal,
-	}
-	if _, err := mdb.SaleItems().InsertOne(ctx, si); err != nil {
-		return err
-	}
-
 	lotCur, err := mdb.DrugLots().Find(ctx,
 		bson.M{"drug_id": item.DrugID, "remaining": bson.M{"$gt": 0}},
 		options.Find().SetSort(bson.D{{Key: "expiry_date", Value: 1}}),
@@ -364,8 +353,24 @@ func (h *SaleHandler) applySaleItem(ctx context.Context, mdb *db.MongoDB, saleID
 	if err := lotCur.All(ctx, &lots); err != nil {
 		return err
 	}
+	if len(lots) == 0 {
+		si := models.SaleItem{
+			SaleID:       saleID,
+			DrugID:       item.DrugID,
+			DrugName:     item.Drug.Name,
+			Qty:          item.Qty,
+			Price:        item.Price,
+			Subtotal:     item.Subtotal,
+			CostSubtotal: float64(item.Qty) * item.Drug.CostPrice,
+		}
+		if _, err := mdb.SaleItems().InsertOne(ctx, si); err != nil {
+			return err
+		}
+		return nil
+	}
 
 	need := item.Qty
+	costSubtotal := 0.0
 	for _, lot := range lots {
 		if need <= 0 {
 			break
@@ -385,10 +390,28 @@ func (h *SaleHandler) applySaleItem(ctx context.Context, mdb *db.MongoDB, saleID
 		if res.MatchedCount == 0 {
 			return fmt.Errorf("insufficient lot inventory for %s", item.Drug.Name)
 		}
+		lotCost := item.Drug.CostPrice
+		if lot.CostPrice != nil {
+			lotCost = *lot.CostPrice
+		}
+		costSubtotal += float64(deduct) * lotCost
 		need -= deduct
 	}
 	if len(lots) > 0 && need > 0 {
 		return fmt.Errorf("insufficient lot inventory for %s", item.Drug.Name)
+	}
+
+	si := models.SaleItem{
+		SaleID:       saleID,
+		DrugID:       item.DrugID,
+		DrugName:     item.Drug.Name,
+		Qty:          item.Qty,
+		Price:        item.Price,
+		Subtotal:     item.Subtotal,
+		CostSubtotal: costSubtotal,
+	}
+	if _, err := mdb.SaleItems().InsertOne(ctx, si); err != nil {
+		return err
 	}
 
 	return nil

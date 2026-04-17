@@ -3,12 +3,14 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
@@ -114,102 +116,103 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	now := time.Now()
-	today := now.Format("060102")
-	counterID := "RET-" + today
-	var counter struct {
-		Seq int `bson:"seq"`
-	}
-	err = mdb.Counters().FindOneAndUpdate(ctx,
-		bson.M{"_id": counterID},
-		bson.M{"$inc": bson.M{"seq": 1}},
-		options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.After),
-	).Decode(&counter)
-	if err != nil {
-		jsonError(w, "return number error: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	returnNo := fmt.Sprintf("RET-%s-%03d", today, counter.Seq)
+	var ret models.DrugReturn
+	if err := mdb.WithTransaction(ctx, func(txCtx context.Context) error {
+		now := time.Now()
+		today := now.Format("060102")
+		counterID := "RET-" + today
+		var counter struct {
+			Seq int `bson:"seq"`
+		}
+		err = mdb.Counters().FindOneAndUpdate(txCtx,
+			bson.M{"_id": counterID},
+			bson.M{"$inc": bson.M{"seq": 1}},
+			options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.After),
+		).Decode(&counter)
+		if err != nil {
+			return fmt.Errorf("return number error: %w", err)
+		}
+		returnNo := fmt.Sprintf("RET-%s-%03d", today, counter.Seq)
 
-	var returnItems []models.ReturnItem
-	var refund float64
+		returnItems := make([]models.ReturnItem, 0, len(input.Items))
+		refund := 0.0
 
-	for _, inp := range input.Items {
-		si := saleItemMap[inp.SaleItemID]
-		siOID, _ := bson.ObjectIDFromHex(inp.SaleItemID)
+		for _, inp := range input.Items {
+			si := saleItemMap[inp.SaleItemID]
+			siOID, _ := bson.ObjectIDFromHex(inp.SaleItemID)
 
-		subtotal := float64(inp.Qty) * si.Price
-		refund += subtotal
+			subtotal := float64(inp.Qty) * si.Price
+			costSubtotal := 0.0
+			if si.Qty > 0 {
+				costSubtotal = (si.CostSubtotal / float64(si.Qty)) * float64(inp.Qty)
+			}
+			refund += subtotal
 
-		returnItems = append(returnItems, models.ReturnItem{
-			SaleItemID: siOID,
-			DrugID:     si.DrugID,
-			DrugName:   si.DrugName,
-			Qty:        inp.Qty,
-			Price:      si.Price,
-			Subtotal:   subtotal,
-		})
+			returnItems = append(returnItems, models.ReturnItem{
+				SaleItemID:   siOID,
+				DrugID:       si.DrugID,
+				DrugName:     si.DrugName,
+				Qty:          inp.Qty,
+				Price:        si.Price,
+				Subtotal:     subtotal,
+				CostSubtotal: costSubtotal,
+			})
 
-		mdb.Drugs().UpdateOne(ctx,
-			bson.M{"_id": si.DrugID},
-			bson.M{"$inc": bson.M{"stock": inp.Qty}},
-		)
+			updateRes, err := mdb.Drugs().UpdateOne(txCtx,
+				bson.M{"_id": si.DrugID},
+				bson.M{"$inc": bson.M{"stock": inp.Qty}},
+			)
+			if err != nil {
+				return err
+			}
+			if updateRes.MatchedCount == 0 {
+				return mongo.ErrNoDocuments
+			}
 
-		// Reverse-FEFO: restore lot.remaining (latest-expiring first)
-		lotCur, lotErr := mdb.DrugLots().Find(ctx,
-			bson.M{"drug_id": si.DrugID},
-			options.Find().SetSort(bson.D{{Key: "expiry_date", Value: -1}}),
-		)
-		if lotErr == nil {
-			var lots []models.DrugLot
-			lotCur.All(ctx, &lots)
-			lotCur.Close(ctx)
-			need := inp.Qty
-			for _, lot := range lots {
-				if need <= 0 {
-					break
-				}
-				canRestore := lot.Quantity - lot.Remaining
-				if canRestore <= 0 {
-					continue
-				}
-				restore := canRestore
-				if restore > need {
-					restore = need
-				}
-				mdb.DrugLots().UpdateOne(ctx,
-					bson.M{"_id": lot.ID},
-					bson.M{"$inc": bson.M{"remaining": restore}},
-				)
-				need -= restore
+			if err := h.restoreReturnItemLots(txCtx, mdb, si, inp.Qty); err != nil {
+				return err
 			}
 		}
-	}
 
-	ret := models.DrugReturn{
-		ReturnNo:     returnNo,
-		SaleID:       oid,
-		BillNo:       sale.BillNo,
-		CustomerID:   sale.CustomerID,
-		CustomerName: sale.CustomerName,
-		Items:        returnItems,
-		Refund:       refund,
-		Reason:       input.Reason,
-		ReturnedAt:   now,
-	}
-	res, err := mdb.DrugReturns().InsertOne(ctx, ret)
-	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
+		ret = models.DrugReturn{
+			ReturnNo:     returnNo,
+			SaleID:       oid,
+			BillNo:       sale.BillNo,
+			CustomerID:   sale.CustomerID,
+			CustomerName: sale.CustomerName,
+			Items:        returnItems,
+			Refund:       refund,
+			Reason:       input.Reason,
+			ReturnedAt:   now,
+		}
+		res, err := mdb.DrugReturns().InsertOne(txCtx, ret)
+		if err != nil {
+			return err
+		}
+		ret.ID = res.InsertedID.(bson.ObjectID)
+
+		if sale.CustomerID != nil {
+			updateRes, err := mdb.Customers().UpdateOne(txCtx,
+				bson.M{"_id": sale.CustomerID},
+				bson.M{"$inc": bson.M{"total_spent": -refund}},
+			)
+			if err != nil {
+				return err
+			}
+			if updateRes.MatchedCount == 0 {
+				return mongo.ErrNoDocuments
+			}
+		}
+
+		return nil
+	}); err != nil {
+		switch {
+		case errors.Is(err, mongo.ErrNoDocuments):
+			jsonError(w, "referenced document not found", http.StatusBadRequest)
+		default:
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+		}
 		return
-	}
-	ret.ID = res.InsertedID.(bson.ObjectID)
-
-	// Reverse customer spend
-	if sale.CustomerID != nil {
-		mdb.Customers().UpdateOne(ctx,
-			bson.M{"_id": sale.CustomerID},
-			bson.M{"$inc": bson.M{"total_spent": -refund}},
-		)
 	}
 
 	jsonOK(w, ret)
@@ -252,4 +255,56 @@ func (h *ReturnHandler) List(w http.ResponseWriter, r *http.Request) {
 		returns = []models.DrugReturn{}
 	}
 	jsonOK(w, returns)
+}
+
+func (h *ReturnHandler) restoreReturnItemLots(ctx context.Context, mdb *db.MongoDB, item models.SaleItem, qty int) error {
+	lotCur, err := mdb.DrugLots().Find(ctx,
+		bson.M{"drug_id": item.DrugID},
+		options.Find().SetSort(bson.D{{Key: "expiry_date", Value: -1}}),
+	)
+	if err != nil {
+		return err
+	}
+	defer lotCur.Close(ctx)
+
+	var lots []models.DrugLot
+	if err := lotCur.All(ctx, &lots); err != nil {
+		return err
+	}
+	if len(lots) == 0 {
+		return nil
+	}
+
+	need := qty
+	for _, lot := range lots {
+		if need <= 0 {
+			break
+		}
+		canRestore := lot.Quantity - lot.Remaining
+		if canRestore <= 0 {
+			continue
+		}
+
+		restore := canRestore
+		if restore > need {
+			restore = need
+		}
+
+		res, err := mdb.DrugLots().UpdateOne(ctx,
+			bson.M{"_id": lot.ID, "remaining": bson.M{"$lte": lot.Quantity - restore}},
+			bson.M{"$inc": bson.M{"remaining": restore}},
+		)
+		if err != nil {
+			return err
+		}
+		if res.MatchedCount == 0 {
+			return fmt.Errorf("failed to restore lot inventory for %s", item.DrugName)
+		}
+		need -= restore
+	}
+
+	if need > 0 {
+		return fmt.Errorf("failed to fully restore lot inventory for %s", item.DrugName)
+	}
+	return nil
 }

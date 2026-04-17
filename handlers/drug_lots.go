@@ -106,8 +106,15 @@ func (h *DrugLotHandler) AddLot(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
+	var drug models.Drug
+	if err := mdb.Drugs().FindOne(ctx, bson.M{"_id": drugOID}).Decode(&drug); err != nil {
+		jsonError(w, "drug not found", http.StatusNotFound)
+		return
+	}
+
 	lot := models.DrugLot{
 		DrugID:     drugOID,
+		DrugName:   drug.Name,
 		LotNumber:  input.LotNumber,
 		ExpiryDate: expiry,
 		ImportDate: importDate,

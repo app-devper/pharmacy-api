@@ -22,13 +22,14 @@ type Sale struct {
 }
 
 type SaleItem struct {
-	ID       bson.ObjectID `bson:"_id,omitempty" json:"id"`
-	SaleID   bson.ObjectID `bson:"sale_id"       json:"sale_id"`
-	DrugID   bson.ObjectID `bson:"drug_id"       json:"drug_id"`
-	DrugName string        `bson:"drug_name"     json:"drug_name"`
-	Qty      int           `bson:"qty"           json:"qty"`
-	Price    float64       `bson:"price"         json:"price"`
-	Subtotal float64       `bson:"subtotal"      json:"subtotal"`
+	ID           bson.ObjectID `bson:"_id,omitempty" json:"id"`
+	SaleID       bson.ObjectID `bson:"sale_id"       json:"sale_id"`
+	DrugID       bson.ObjectID `bson:"drug_id"       json:"drug_id"`
+	DrugName     string        `bson:"drug_name"     json:"drug_name"`
+	Qty          int           `bson:"qty"           json:"qty"`
+	Price        float64       `bson:"price"         json:"price"`
+	Subtotal     float64       `bson:"subtotal"      json:"subtotal"`
+	CostSubtotal float64       `bson:"cost_subtotal" json:"cost_subtotal"`
 }
 
 type SaleItemInput struct {

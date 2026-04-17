@@ -21,7 +21,7 @@ import (
 // MovementEntry is one unified stock-movement record returned by GET /api/movements.
 type MovementEntry struct {
 	ID        string    `json:"id"`
-	Type      string    `json:"type"`      // import|sale|return|adjustment|writeoff
+	Type      string    `json:"type"` // import|sale|return|adjustment|writeoff
 	DrugID    string    `json:"drug_id"`
 	DrugName  string    `json:"drug_name"`
 	Delta     int       `json:"delta"`     // positive = stock in, negative = stock out
@@ -169,39 +169,25 @@ func (h *MovementsHandler) List(w http.ResponseWriter, r *http.Request) {
 // ─── import ───────────────────────────────────────────────────────────────────
 
 func fetchImports(ctx context.Context, d *db.MongoDB, from, to time.Time, drugName string) []MovementEntry {
-	matchStage := bson.D{
-		{Key: "import_date", Value: bson.M{"$gte": from, "$lt": to}},
-	}
-	pipeline := mongo.Pipeline{
-		{{Key: "$match", Value: matchStage}},
-		{{Key: "$lookup", Value: bson.M{
-			"from": "drugs", "localField": "drug_id",
-			"foreignField": "_id", "as": "drug",
-		}}},
-		{{Key: "$unwind", Value: bson.M{"path": "$drug", "preserveNullAndEmptyArrays": true}}},
+	filter := bson.M{
+		"created_at": bson.M{"$gte": from, "$lt": to},
 	}
 	if drugName != "" {
-		pipeline = append(pipeline, bson.D{{Key: "$match", Value: bson.M{
-			"drug.name": bson.M{"$regex": regexp.QuoteMeta(drugName), "$options": "i"},
-		}}})
+		filter["drug_name"] = bson.M{"$regex": regexp.QuoteMeta(drugName), "$options": "i"}
 	}
-	pipeline = append(pipeline, bson.D{{Key: "$limit", Value: 2000}})
-
-	cur, err := d.DrugLots().Aggregate(ctx, pipeline)
+	cur, err := d.DrugLots().Find(ctx, filter)
 	if err != nil {
 		return nil
 	}
 	defer cur.Close(ctx)
 
 	var results []struct {
-		ID         bson.ObjectID `bson:"_id"`
-		LotNumber  string        `bson:"lot_number"`
-		Quantity   int           `bson:"quantity"`
-		ImportDate time.Time     `bson:"import_date"`
-		Drug       struct {
-			ID   bson.ObjectID `bson:"_id"`
-			Name string        `bson:"name"`
-		} `bson:"drug"`
+		ID        bson.ObjectID `bson:"_id"`
+		DrugID    bson.ObjectID `bson:"drug_id"`
+		DrugName  string        `bson:"drug_name"`
+		LotNumber string        `bson:"lot_number"`
+		Quantity  int           `bson:"quantity"`
+		CreatedAt time.Time     `bson:"created_at"`
 	}
 	cur.All(ctx, &results)
 
@@ -210,11 +196,11 @@ func fetchImports(ctx context.Context, d *db.MongoDB, from, to time.Time, drugNa
 		entries = append(entries, MovementEntry{
 			ID:        r.ID.Hex(),
 			Type:      "import",
-			DrugID:    r.Drug.ID.Hex(),
-			DrugName:  r.Drug.Name,
+			DrugID:    r.DrugID.Hex(),
+			DrugName:  r.DrugName,
 			Delta:     r.Quantity,
 			Reference: r.LotNumber,
-			At:        r.ImportDate,
+			At:        r.CreatedAt,
 		})
 	}
 	return entries
@@ -234,19 +220,12 @@ func fetchSales(ctx context.Context, d *db.MongoDB, from, to time.Time, drugName
 			"sale.sold_at": bson.M{"$gte": from, "$lt": to},
 			"sale.voided":  bson.M{"$ne": true},
 		}}},
-		// join with drugs for drug_name
-		{{Key: "$lookup", Value: bson.M{
-			"from": "drugs", "localField": "drug_id",
-			"foreignField": "_id", "as": "drug",
-		}}},
-		{{Key: "$unwind", Value: bson.M{"path": "$drug", "preserveNullAndEmptyArrays": true}}},
 	}
 	if drugName != "" {
 		pipeline = append(pipeline, bson.D{{Key: "$match", Value: bson.M{
-			"drug.name": bson.M{"$regex": regexp.QuoteMeta(drugName), "$options": "i"},
+			"drug_name": bson.M{"$regex": regexp.QuoteMeta(drugName), "$options": "i"},
 		}}})
 	}
-	pipeline = append(pipeline, bson.D{{Key: "$limit", Value: 5000}})
 
 	cur, err := d.SaleItems().Aggregate(ctx, pipeline)
 	if err != nil {
@@ -255,16 +234,14 @@ func fetchSales(ctx context.Context, d *db.MongoDB, from, to time.Time, drugName
 	defer cur.Close(ctx)
 
 	var results []struct {
-		ID   bson.ObjectID `bson:"_id"`
-		Qty  int           `bson:"qty"`
-		Sale struct {
+		ID       bson.ObjectID `bson:"_id"`
+		DrugID   bson.ObjectID `bson:"drug_id"`
+		DrugName string        `bson:"drug_name"`
+		Qty      int           `bson:"qty"`
+		Sale     struct {
 			BillNo string    `bson:"bill_no"`
 			SoldAt time.Time `bson:"sold_at"`
 		} `bson:"sale"`
-		Drug struct {
-			ID   bson.ObjectID `bson:"_id"`
-			Name string        `bson:"name"`
-		} `bson:"drug"`
 	}
 	cur.All(ctx, &results)
 
@@ -273,8 +250,8 @@ func fetchSales(ctx context.Context, d *db.MongoDB, from, to time.Time, drugName
 		entries = append(entries, MovementEntry{
 			ID:        r.ID.Hex(),
 			Type:      "sale",
-			DrugID:    r.Drug.ID.Hex(),
-			DrugName:  r.Drug.Name,
+			DrugID:    r.DrugID.Hex(),
+			DrugName:  r.DrugName,
 			Delta:     -r.Qty,
 			Reference: r.Sale.BillNo,
 			At:        r.Sale.SoldAt,
@@ -302,7 +279,6 @@ func fetchReturns(ctx context.Context, d *db.MongoDB, from, to time.Time, drugNa
 	if drugName != "" {
 		pipeline = append(pipeline, bson.D{{Key: "$match", Value: matchName}})
 	}
-	pipeline = append(pipeline, bson.D{{Key: "$limit", Value: 2000}})
 
 	cur, err := d.DrugReturns().Aggregate(ctx, pipeline)
 	if err != nil {

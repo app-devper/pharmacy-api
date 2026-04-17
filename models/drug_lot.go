@@ -13,13 +13,14 @@ import (
 type DrugLot struct {
 	ID         bson.ObjectID `bson:"_id,omitempty"  json:"id"`
 	DrugID     bson.ObjectID `bson:"drug_id"        json:"drug_id"`
+	DrugName   string        `bson:"drug_name"      json:"drug_name"`
 	LotNumber  string        `bson:"lot_number"     json:"lot_number"`
 	ExpiryDate time.Time     `bson:"expiry_date"    json:"expiry_date"`
 	ImportDate time.Time     `bson:"import_date"    json:"import_date"`
-	CostPrice  *float64      `bson:"cost_price"     json:"cost_price"`  // nil = use drug.CostPrice
-	SellPrice  *float64      `bson:"sell_price"     json:"sell_price"`  // nil = use drug.SellPrice
-	Quantity   int           `bson:"quantity"       json:"quantity"`    // original import qty
-	Remaining  int           `bson:"remaining"      json:"remaining"`   // current qty in this lot
+	CostPrice  *float64      `bson:"cost_price"     json:"cost_price"` // nil = use drug.CostPrice
+	SellPrice  *float64      `bson:"sell_price"     json:"sell_price"` // nil = use drug.SellPrice
+	Quantity   int           `bson:"quantity"       json:"quantity"`   // original import qty
+	Remaining  int           `bson:"remaining"      json:"remaining"`  // current qty in this lot
 	CreatedAt  time.Time     `bson:"created_at"     json:"created_at"`
 }
 
