@@ -39,6 +39,88 @@ type DrugHandler struct{ dbm *db.Manager }
 
 func NewDrugHandler(d *db.Manager) *DrugHandler { return &DrugHandler{dbm: d} }
 
+// validateAltUnits trims names and enforces the multi-unit invariants:
+// factor >= 2, non-empty unique names that don't clash with the base unit,
+// sell_price >= 0. Returns the normalised slice or an error. Also normalises
+// the PriceTiers on each alt unit (Retail falls back to SellPrice if 0).
+func validateAltUnits(alts []models.AltUnit, baseUnit string) ([]models.AltUnit, error) {
+	if len(alts) == 0 {
+		return []models.AltUnit{}, nil
+	}
+	out := make([]models.AltUnit, 0, len(alts))
+	seen := make(map[string]struct{}, len(alts))
+	for i, a := range alts {
+		a.Name = strings.TrimSpace(a.Name)
+		a.Barcode = strings.TrimSpace(a.Barcode)
+		if a.Name == "" {
+			return nil, fmt.Errorf("alt_units[%d].name is required", i)
+		}
+		if a.Name == baseUnit {
+			return nil, fmt.Errorf("alt_units[%d].name ต้องต่างจากหน่วยหลัก (%s)", i, baseUnit)
+		}
+		if _, dup := seen[a.Name]; dup {
+			return nil, fmt.Errorf("alt_units[%d].name %q ซ้ำ", i, a.Name)
+		}
+		seen[a.Name] = struct{}{}
+		if a.Factor < 2 {
+			return nil, fmt.Errorf("alt_units[%d].factor ต้อง >= 2 (ถ้า = 1 ให้ใช้หน่วยหลักแทน)", i)
+		}
+		if a.SellPrice < 0 {
+			return nil, fmt.Errorf("alt_units[%d].sell_price ต้อง >= 0", i)
+		}
+		tiers, err := validatePriceTiers(a.Prices, a.SellPrice)
+		if err != nil {
+			return nil, fmt.Errorf("alt_units[%d]: %w", i, err)
+		}
+		a.Prices = tiers
+		// Keep SellPrice in sync with Retail so legacy code keeps working.
+		a.SellPrice = tiers.Retail
+		out = append(out, a)
+	}
+	return out, nil
+}
+
+// validatePriceTiers rejects negatives and fills Retail with the fallback
+// (typically the drug's SellPrice) when the caller left it at 0.
+func validatePriceTiers(p models.PriceTiers, retailFallback float64) (models.PriceTiers, error) {
+	if p.Retail < 0 || p.Regular < 0 || p.Wholesale < 0 {
+		return models.PriceTiers{}, fmt.Errorf("ราคาทุก tier ต้อง >= 0")
+	}
+	if p.Retail == 0 {
+		p.Retail = retailFallback
+	}
+	return p, nil
+}
+
+// resolveTierPrice picks the effective per-unit price given the customer's tier.
+// A tier price of 0 means "not set" and transparently falls back to Retail,
+// which itself falls back to SellPrice via validatePriceTiers above.
+func resolveTierPrice(base float64, p models.PriceTiers, tier string) float64 {
+	switch tier {
+	case "regular":
+		if p.Regular > 0 {
+			return p.Regular
+		}
+	case "wholesale":
+		if p.Wholesale > 0 {
+			return p.Wholesale
+		}
+	}
+	if p.Retail > 0 {
+		return p.Retail
+	}
+	return base
+}
+
+// isValidPriceTier returns true when the string is one of the allowed values.
+func isValidPriceTier(t string) bool {
+	switch t {
+	case "", "retail", "regular", "wholesale":
+		return true
+	}
+	return false
+}
+
 func buildDrugCreatePayload(input models.DrugInput, now time.Time) (models.Drug, *models.DrugLot, error) {
 	if input.Name == "" {
 		return models.Drug{}, nil, errors.New("name is required")
@@ -56,6 +138,19 @@ func buildDrugCreatePayload(input models.DrugInput, now time.Time) (models.Drug,
 		input.ReportTypes = []string{}
 	}
 	input.Barcode = strings.TrimSpace(input.Barcode)
+
+	altUnits, err := validateAltUnits(input.AltUnits, input.Unit)
+	if err != nil {
+		return models.Drug{}, nil, err
+	}
+
+	// Base-unit tier prices. Retail falls back to SellPrice for backward compat.
+	priceTiers, err := validatePriceTiers(input.Prices, input.SellPrice)
+	if err != nil {
+		return models.Drug{}, nil, err
+	}
+	// Keep SellPrice in sync with Retail so legacy readers see the expected value.
+	input.SellPrice = priceTiers.Retail
 
 	// Reject negative stock outright.
 	if input.Stock < 0 {
@@ -126,6 +221,8 @@ func buildDrugCreatePayload(input models.DrugInput, now time.Time) (models.Drug,
 		RegNo:       input.RegNo,
 		Unit:        input.Unit,
 		ReportTypes: input.ReportTypes,
+		AltUnits:    altUnits,
+		Prices:      priceTiers,
 		CreatedAt:   now,
 	}
 	return drug, createLot, nil
@@ -246,6 +343,18 @@ func (h *DrugHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	input.Barcode = strings.TrimSpace(input.Barcode)
 
+	altUnits, err := validateAltUnits(input.AltUnits, input.Unit)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	priceTiers, err := validatePriceTiers(input.Prices, input.SellPrice)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	input.SellPrice = priceTiers.Retail
+
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
 		jsonError(w, "unauthorized client", http.StatusForbidden)
@@ -268,6 +377,8 @@ func (h *DrugHandler) Update(w http.ResponseWriter, r *http.Request) {
 			"reg_no":       input.RegNo,
 			"unit":         input.Unit,
 			"report_types": input.ReportTypes,
+			"alt_units":    altUnits,
+			"prices":       priceTiers,
 		}},
 	)
 	if err != nil {

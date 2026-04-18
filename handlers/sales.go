@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -31,12 +32,15 @@ var errSaleAlreadyVoided = errors.New("sale already voided")
 type preparedSaleItem struct {
 	Drug          models.Drug
 	DrugID        bson.ObjectID
-	Qty           int
-	Price         float64 // effective per-unit price (OriginalPrice - ItemDiscount)
+	Qty           int     // BASE units
+	Price         float64 // per BASE unit, post item-discount
 	OriginalPrice float64
 	ItemDiscount  float64
 	Subtotal      float64
 	CostSubtotal  float64
+	Unit          string // alt-unit display name ("" = base)
+	UnitFactor    int    // 1 = base unit; >=2 = alt
+	PriceTier     string // "" | retail | regular | wholesale
 }
 
 func (h *SaleHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -271,18 +275,55 @@ func (h *SaleHandler) prepareSaleItems(ctx context.Context, mdb *db.MongoDB, inp
 		if err := mdb.Drugs().FindOne(ctx, bson.M{"_id": drugID}).Decode(&drug); err != nil {
 			return nil, 0, err
 		}
-		// Back-compat: if client didn't send OriginalPrice, treat Price as the original
-		// and ItemDiscount as 0. Otherwise derive effective Price from (OriginalPrice - ItemDiscount).
-		originalPrice := input.OriginalPrice
-		itemDiscount := input.ItemDiscount
-		effectivePrice := input.Price
-		if originalPrice > 0 {
-			effectivePrice = originalPrice - itemDiscount
-			if effectivePrice < 0 {
-				effectivePrice = 0
+
+		// Multi-unit: when the client ships a non-empty Unit, verify it matches an
+		// AltUnit on the drug and that the supplied Qty (which is ALWAYS in base
+		// units) is a multiple of the factor. UnitFactor = 0 or 1 = base unit.
+		unit := strings.TrimSpace(input.Unit)
+		factor := input.UnitFactor
+		var matchedAlt *models.AltUnit
+		if unit != "" {
+			for i := range drug.AltUnits {
+				if drug.AltUnits[i].Name == unit {
+					matchedAlt = &drug.AltUnits[i]
+					break
+				}
+			}
+			if matchedAlt == nil {
+				return nil, 0, fmt.Errorf("unit %q ไม่พบในยา %s", unit, drug.Name)
+			}
+			if factor == 0 {
+				factor = matchedAlt.Factor
+			} else if factor != matchedAlt.Factor {
+				return nil, 0, fmt.Errorf("unit_factor ไม่ตรงกับ alt_unit ของยา %s", drug.Name)
+			}
+			if input.Qty%factor != 0 {
+				return nil, 0, fmt.Errorf("qty (%d) ต้องหารด้วย factor (%d) ลงตัว สำหรับยา %s", input.Qty, factor, drug.Name)
 			}
 		} else {
-			originalPrice = effectivePrice
+			factor = 1 // base unit
+		}
+
+		// Pricing tier: authoritative price comes from the drug document, not
+		// the client's claimed `original_price`. This closes the "client sets
+		// tier=wholesale but sends retail amount" loophole.
+		tier := strings.TrimSpace(input.PriceTier)
+		if !isValidPriceTier(tier) {
+			return nil, 0, fmt.Errorf("price_tier ของยา %s ไม่ถูกต้อง", drug.Name)
+		}
+		var authoritativeOriginal float64
+		if matchedAlt != nil {
+			perAlt := resolveTierPrice(matchedAlt.SellPrice, matchedAlt.Prices, tier)
+			authoritativeOriginal = perAlt / float64(factor) // convert to per-base unit
+		} else {
+			authoritativeOriginal = resolveTierPrice(drug.SellPrice, drug.Prices, tier)
+		}
+
+		originalPrice := authoritativeOriginal
+		itemDiscount := input.ItemDiscount
+		effectivePrice := originalPrice - itemDiscount
+		if effectivePrice < 0 {
+			effectivePrice = 0
 		}
 		subtotal += effectivePrice * float64(input.Qty)
 		requiredByDrug[drugID] += input.Qty
@@ -294,6 +335,9 @@ func (h *SaleHandler) prepareSaleItems(ctx context.Context, mdb *db.MongoDB, inp
 			OriginalPrice: originalPrice,
 			ItemDiscount:  itemDiscount,
 			Subtotal:      effectivePrice * float64(input.Qty),
+			Unit:          unit,
+			UnitFactor:    factor,
+			PriceTier:     tier,
 		})
 	}
 
@@ -413,6 +457,9 @@ func (h *SaleHandler) applySaleItem(ctx context.Context, mdb *db.MongoDB, saleID
 			ItemDiscount:  item.ItemDiscount,
 			Subtotal:      item.Subtotal,
 			CostSubtotal:  float64(item.Qty) * item.Drug.CostPrice,
+			Unit:          item.Unit,
+			UnitFactor:    item.UnitFactor,
+			PriceTier:     item.PriceTier,
 		}
 		if _, err := mdb.SaleItems().InsertOne(ctx, si); err != nil {
 			return err
@@ -462,6 +509,9 @@ func (h *SaleHandler) applySaleItem(ctx context.Context, mdb *db.MongoDB, saleID
 		ItemDiscount:  item.ItemDiscount,
 		Subtotal:      item.Subtotal,
 		CostSubtotal:  costSubtotal,
+		Unit:          item.Unit,
+		UnitFactor:    item.UnitFactor,
+		PriceTier:     item.PriceTier,
 	}
 	if _, err := mdb.SaleItems().InsertOne(ctx, si); err != nil {
 		return err

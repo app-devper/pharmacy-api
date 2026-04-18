@@ -26,20 +26,30 @@ type SaleItem struct {
 	SaleID        bson.ObjectID `bson:"sale_id"           json:"sale_id"`
 	DrugID        bson.ObjectID `bson:"drug_id"           json:"drug_id"`
 	DrugName      string        `bson:"drug_name"         json:"drug_name"`
-	Qty           int           `bson:"qty"               json:"qty"`
-	Price         float64       `bson:"price"             json:"price"` // effective per-unit price (= OriginalPrice - ItemDiscount)
+	Qty           int           `bson:"qty"               json:"qty"` // always in BASE units
+	Price         float64       `bson:"price"             json:"price"` // per BASE unit, post item-discount
 	OriginalPrice float64       `bson:"original_price"    json:"original_price"`
-	ItemDiscount  float64       `bson:"item_discount"     json:"item_discount"` // per-unit discount
+	ItemDiscount  float64       `bson:"item_discount"     json:"item_discount"` // per-base-unit discount
 	Subtotal      float64       `bson:"subtotal"          json:"subtotal"`
 	CostSubtotal  float64       `bson:"cost_subtotal"     json:"cost_subtotal"`
+	// Multi-unit display metadata. When set, the item was sold in an alt unit.
+	// Qty/Price stay in base units; display layer computes
+	// display_qty = Qty / UnitFactor, display_price = Price * UnitFactor.
+	Unit       string `bson:"unit,omitempty"        json:"unit"`
+	UnitFactor int    `bson:"unit_factor,omitempty" json:"unit_factor"`
+	// Pricing tier applied to this line. "" = retail (default).
+	PriceTier  string `bson:"price_tier,omitempty"  json:"price_tier"`
 }
 
 type SaleItemInput struct {
 	DrugID        string  `json:"drug_id"`
-	Qty           int     `json:"qty"`
+	Qty           int     `json:"qty"` // in base units
 	Price         float64 `json:"price"`
 	OriginalPrice float64 `json:"original_price"`
 	ItemDiscount  float64 `json:"item_discount"`
+	Unit          string  `json:"unit"`         // alt-unit display name, "" = base
+	UnitFactor    int     `json:"unit_factor"`  // 0 or 1 = base
+	PriceTier     string  `json:"price_tier"`   // "" | retail | regular | wholesale
 }
 
 type SaleInput struct {

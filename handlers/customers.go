@@ -62,6 +62,10 @@ func (h *CustomerHandler) Add(w http.ResponseWriter, r *http.Request) {
 	if input.Disease == "" {
 		input.Disease = "-"
 	}
+	if !isValidPriceTier(input.PriceTier) {
+		jsonError(w, "price_tier ต้องเป็น retail|regular|wholesale หรือว่าง", http.StatusBadRequest)
+		return
+	}
 
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
@@ -75,6 +79,7 @@ func (h *CustomerHandler) Add(w http.ResponseWriter, r *http.Request) {
 		Name:      input.Name,
 		Phone:     strings.TrimSpace(input.Phone),
 		Disease:   input.Disease,
+		PriceTier: input.PriceTier,
 		CreatedAt: time.Now(),
 	}
 	res, err := mdb.Customers().InsertOne(ctx, cust)
@@ -111,6 +116,10 @@ func (h *CustomerHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if input.Disease == "" {
 		input.Disease = "-"
 	}
+	if !isValidPriceTier(input.PriceTier) {
+		jsonError(w, "price_tier ต้องเป็น retail|regular|wholesale หรือว่าง", http.StatusBadRequest)
+		return
+	}
 
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
@@ -124,9 +133,10 @@ func (h *CustomerHandler) Update(w http.ResponseWriter, r *http.Request) {
 	err = mdb.Customers().FindOneAndUpdate(ctx,
 		bson.M{"_id": oid},
 		bson.M{"$set": bson.M{
-			"name":    input.Name,
-			"phone":   strings.TrimSpace(input.Phone),
-			"disease": input.Disease,
+			"name":       input.Name,
+			"phone":      strings.TrimSpace(input.Phone),
+			"disease":    input.Disease,
+			"price_tier": input.PriceTier,
 		}},
 		options.FindOneAndUpdate().SetReturnDocument(options.After),
 	).Decode(&updated)
