@@ -3,11 +3,14 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
@@ -31,7 +34,7 @@ func (h *SupplierHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	filter := bson.M{}
 	if q := r.URL.Query().Get("q"); q != "" {
-		filter["name"] = bson.M{"$regex": q, "$options": "i"}
+		filter["name"] = bson.M{"$regex": regexp.QuoteMeta(q), "$options": "i"}
 	}
 
 	cur, err := mdb.Suppliers().Find(ctx, filter,
@@ -85,6 +88,10 @@ func (h *SupplierHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := mdb.Suppliers().InsertOne(ctx, supplier)
 	if err != nil {
+		if isMongoDuplicate(err) {
+			jsonError(w, "ชื่อนี้มีอยู่ในระบบแล้ว", http.StatusConflict)
+			return
+		}
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -133,6 +140,14 @@ func (h *SupplierHandler) Update(w http.ResponseWriter, r *http.Request) {
 		options.FindOneAndUpdate().SetReturnDocument(options.After),
 	).Decode(&updated)
 	if err != nil {
+		if isMongoDuplicate(err) {
+			jsonError(w, "ชื่อนี้มีอยู่ในระบบแล้ว", http.StatusConflict)
+			return
+		}
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			jsonError(w, "supplier not found", http.StatusNotFound)
+			return
+		}
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -156,9 +171,13 @@ func (h *SupplierHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	_, err = mdb.Suppliers().DeleteOne(ctx, bson.M{"_id": oid})
+	res, err := mdb.Suppliers().DeleteOne(ctx, bson.M{"_id": oid})
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if res.DeletedCount == 0 {
+		jsonError(w, "supplier not found", http.StatusNotFound)
 		return
 	}
 	jsonOK(w, map[string]bool{"ok": true})

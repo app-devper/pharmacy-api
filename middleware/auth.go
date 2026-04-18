@@ -36,8 +36,8 @@ func RequireAuth(secretKey, expectedSystem string) func(http.Handler) http.Handl
 				return
 			}
 
-			parts := strings.SplitN(authHeader, "Bearer ", 2)
-			if len(parts) < 2 || parts[1] == "" {
+			parts := strings.Fields(authHeader)
+			if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
 				http.Error(w, `{"error":"invalid authorization header"}`, http.StatusUnauthorized)
 				return
 			}

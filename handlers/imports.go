@@ -30,6 +30,8 @@ type importLogEntry struct {
 	Qty       int
 }
 
+var errPurchaseOrderNoLongerDraft = errors.New("purchase order is no longer draft")
+
 // List returns all purchase orders (summary only, items excluded).
 func (h *ImportHandler) List(w http.ResponseWriter, r *http.Request) {
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
@@ -129,9 +131,12 @@ func (h *ImportHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	receiveDate := now
 	if input.ReceiveDate != "" {
-		if parsed, err := time.Parse("2006-01-02", input.ReceiveDate); err == nil {
-			receiveDate = parsed
+		parsed, err := time.ParseInLocation("2006-01-02", input.ReceiveDate, time.Local)
+		if err != nil {
+			jsonError(w, "receive_date must be YYYY-MM-DD", http.StatusBadRequest)
+			return
 		}
+		receiveDate = parsed
 	}
 
 	items, totalCost, err := h.buildItems(ctx, mdb, input.Items)
@@ -198,9 +203,12 @@ func (h *ImportHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	receiveDate := existing.ReceiveDate
 	if input.ReceiveDate != "" {
-		if parsed, err := time.Parse("2006-01-02", input.ReceiveDate); err == nil {
-			receiveDate = parsed
+		parsed, err := time.ParseInLocation("2006-01-02", input.ReceiveDate, time.Local)
+		if err != nil {
+			jsonError(w, "receive_date must be YYYY-MM-DD", http.StatusBadRequest)
+			return
 		}
+		receiveDate = parsed
 	}
 
 	items, totalCost, err := h.buildItems(ctx, mdb, input.Items)
@@ -209,7 +217,7 @@ func (h *ImportHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = mdb.PurchaseOrders().UpdateOne(ctx, bson.M{"_id": oid},
+	res, err := mdb.PurchaseOrders().UpdateOne(ctx, bson.M{"_id": oid, "status": "draft"},
 		bson.M{"$set": bson.M{
 			"supplier":     input.Supplier,
 			"invoice_no":   input.InvoiceNo,
@@ -222,6 +230,10 @@ func (h *ImportHandler) Update(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if res.MatchedCount == 0 {
+		jsonError(w, "cannot edit a confirmed order", http.StatusBadRequest)
 		return
 	}
 
@@ -276,7 +288,7 @@ func (h *ImportHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, fmt.Sprintf("รายการที่ %d: จำนวนต้องมากกว่า 0", i+1), http.StatusBadRequest)
 			return
 		}
-		if _, err := time.Parse("2006-01-02", item.ExpiryDate); err != nil {
+		if _, err := time.ParseInLocation("2006-01-02", item.ExpiryDate, time.Local); err != nil {
 			jsonError(w, fmt.Sprintf("รายการที่ %d: วันหมดอายุไม่ถูกต้อง", i+1), http.StatusBadRequest)
 			return
 		}
@@ -289,7 +301,7 @@ func (h *ImportHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 		attemptLogs := make([]importLogEntry, 0, len(po.Items))
 
 		for _, item := range po.Items {
-			expiry, _ := time.Parse("2006-01-02", item.ExpiryDate)
+			expiry, _ := time.ParseInLocation("2006-01-02", item.ExpiryDate, time.Local)
 			costPrice := item.CostPrice
 
 			lot := models.DrugLot{
@@ -356,12 +368,16 @@ func (h *ImportHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		if updateRes.MatchedCount == 0 {
-			return fmt.Errorf("purchase order is no longer draft")
+			return errPurchaseOrderNoLongerDraft
 		}
 		po.ConfirmedAt = &now
 		logEntries = attemptLogs
 		return nil
 	}); err != nil {
+		if errors.Is(err, errPurchaseOrderNoLongerDraft) {
+			jsonError(w, err.Error(), http.StatusConflict)
+			return
+		}
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			jsonError(w, "drug not found", http.StatusBadRequest)
 			return
@@ -404,7 +420,15 @@ func (h *ImportHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mdb.PurchaseOrders().DeleteOne(ctx, bson.M{"_id": oid})
+	res, err := mdb.PurchaseOrders().DeleteOne(ctx, bson.M{"_id": oid, "status": "draft"})
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if res.DeletedCount == 0 {
+		jsonError(w, "not found", http.StatusNotFound)
+		return
+	}
 	jsonOK(w, map[string]bool{"ok": true})
 }
 

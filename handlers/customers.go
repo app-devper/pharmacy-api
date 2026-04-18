@@ -3,11 +3,13 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
@@ -124,6 +126,10 @@ func (h *CustomerHandler) Update(w http.ResponseWriter, r *http.Request) {
 		options.FindOneAndUpdate().SetReturnDocument(options.After),
 	).Decode(&updated)
 	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			jsonError(w, "customer not found", http.StatusNotFound)
+			return
+		}
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -146,6 +152,15 @@ func (h *CustomerHandler) GetSales(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
+
+	if err := mdb.Customers().FindOne(ctx, bson.M{"_id": oid}).Err(); err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			jsonError(w, "customer not found", http.StatusNotFound)
+			return
+		}
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	cur, err := mdb.Sales().Find(ctx,
 		bson.M{"customer_id": oid},

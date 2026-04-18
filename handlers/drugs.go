@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -34,6 +35,98 @@ func isMongoDuplicate(err error) bool {
 type DrugHandler struct{ dbm *db.Manager }
 
 func NewDrugHandler(d *db.Manager) *DrugHandler { return &DrugHandler{dbm: d} }
+
+func buildDrugCreatePayload(input models.DrugInput, now time.Time) (models.Drug, *models.DrugLot, error) {
+	if input.Name == "" {
+		return models.Drug{}, nil, errors.New("name is required")
+	}
+	if len(input.Name) > 255 {
+		return models.Drug{}, nil, errors.New("name too long (max 255)")
+	}
+	if input.Type == "" {
+		input.Type = "ยาสามัญ"
+	}
+	if input.Unit == "" {
+		input.Unit = "ชิ้น"
+	}
+	if input.ReportTypes == nil {
+		input.ReportTypes = []string{}
+	}
+	input.Barcode = strings.TrimSpace(input.Barcode)
+
+	// Reject negative stock outright.
+	if input.Stock < 0 {
+		return models.Drug{}, nil, errors.New("stock must be >= 0")
+	}
+	initialStock := input.Stock
+	// Enforce: stock > 0 requires create_lot so drug.stock is always backed by a real lot.
+	if input.Stock > 0 && input.CreateLot == nil {
+		return models.Drug{}, nil, errors.New("create_lot is required when stock > 0")
+	}
+	var createLot *models.DrugLot
+	if input.CreateLot != nil {
+		input.CreateLot.LotNumber = strings.TrimSpace(input.CreateLot.LotNumber)
+		if input.CreateLot.LotNumber == "" {
+			return models.Drug{}, nil, errors.New("create_lot.lot_number is required")
+		}
+		if input.CreateLot.Quantity <= 0 {
+			return models.Drug{}, nil, errors.New("create_lot.quantity must be > 0")
+		}
+		if input.CreateLot.ExpiryDate == "" {
+			return models.Drug{}, nil, errors.New("create_lot.expiry_date is required")
+		}
+
+		expiry, err := time.ParseInLocation("2006-01-02", input.CreateLot.ExpiryDate, time.Local)
+		if err != nil {
+			return models.Drug{}, nil, errors.New("create_lot.expiry_date must be YYYY-MM-DD")
+		}
+		// Expiry must be strictly after today (midnight-local).
+		today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
+		if !expiry.After(today) {
+			return models.Drug{}, nil, errors.New("create_lot.expiry_date must be in the future")
+		}
+		importDate := now
+		if input.CreateLot.ImportDate != "" {
+			parsed, err := time.ParseInLocation("2006-01-02", input.CreateLot.ImportDate, time.Local)
+			if err != nil {
+				return models.Drug{}, nil, errors.New("create_lot.import_date must be YYYY-MM-DD")
+			}
+			importDate = parsed
+		}
+		if input.Stock != 0 && input.Stock != input.CreateLot.Quantity {
+			return models.Drug{}, nil, errors.New("stock must be 0 or equal create_lot.quantity when create_lot is provided")
+		}
+		initialStock = input.CreateLot.Quantity
+		createLot = &models.DrugLot{
+			DrugName:   input.Name,
+			LotNumber:  input.CreateLot.LotNumber,
+			ExpiryDate: expiry,
+			ImportDate: importDate,
+			CostPrice:  input.CreateLot.CostPrice,
+			SellPrice:  input.CreateLot.SellPrice,
+			Quantity:   input.CreateLot.Quantity,
+			Remaining:  input.CreateLot.Quantity,
+			CreatedAt:  now,
+		}
+	}
+
+	drug := models.Drug{
+		Name:        input.Name,
+		GenericName: input.GenericName,
+		Type:        input.Type,
+		Strength:    input.Strength,
+		Barcode:     input.Barcode,
+		SellPrice:   input.SellPrice,
+		CostPrice:   input.CostPrice,
+		Stock:       initialStock,
+		MinStock:    input.MinStock,
+		RegNo:       input.RegNo,
+		Unit:        input.Unit,
+		ReportTypes: input.ReportTypes,
+		CreatedAt:   now,
+	}
+	return drug, createLot, nil
+}
 
 func (h *DrugHandler) List(w http.ResponseWriter, r *http.Request) {
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
@@ -68,21 +161,6 @@ func (h *DrugHandler) Add(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	if input.Name == "" {
-		jsonError(w, "name is required", http.StatusBadRequest)
-		return
-	}
-	if len(input.Name) > 255 {
-		jsonError(w, "name too long (max 255)", http.StatusBadRequest)
-		return
-	}
-	if input.Type == "" {
-		input.Type = "ยาสามัญ"
-	}
-	if input.Unit == "" {
-		input.Unit = "ชิ้น"
-	}
-	input.Barcode = strings.TrimSpace(input.Barcode)
 
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
@@ -92,26 +170,38 @@ func (h *DrugHandler) Add(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	if input.ReportTypes == nil {
-		input.ReportTypes = []string{}
-	}
-	drug := models.Drug{
-		Name:        input.Name,
-		GenericName: input.GenericName,
-		Type:        input.Type,
-		Strength:    input.Strength,
-		Barcode:     input.Barcode,
-		SellPrice:   input.SellPrice,
-		CostPrice:   input.CostPrice,
-		Stock:       input.Stock,
-		MinStock:    input.MinStock,
-		RegNo:       input.RegNo,
-		Unit:        input.Unit,
-		ReportTypes: input.ReportTypes,
-		CreatedAt:   time.Now(),
-	}
-	res, err := mdb.Drugs().InsertOne(ctx, drug)
+	drug, createLot, err := buildDrugCreatePayload(input, time.Now())
 	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := mdb.WithTransaction(ctx, func(txCtx context.Context) error {
+		res, err := mdb.Drugs().InsertOne(txCtx, drug)
+		if err != nil {
+			return err
+		}
+		drug.ID = res.InsertedID.(bson.ObjectID)
+		if createLot == nil {
+			return nil
+		}
+
+		lot := *createLot
+		lot.DrugID = drug.ID
+		lot.DrugName = drug.Name
+		if lot.CostPrice == nil {
+			lotCost := drug.CostPrice
+			lot.CostPrice = &lotCost
+		}
+		if lot.SellPrice == nil {
+			lotPrice := drug.SellPrice
+			lot.SellPrice = &lotPrice
+		}
+
+		if _, err := mdb.DrugLots().InsertOne(txCtx, lot); err != nil {
+			return fmt.Errorf("create lot failed: %w", err)
+		}
+		return nil
+	}); err != nil {
 		if isMongoDuplicate(err) {
 			jsonError(w, "บาร์โค้ดนี้มีอยู่ในระบบแล้ว", http.StatusConflict)
 			return
@@ -119,7 +209,6 @@ func (h *DrugHandler) Add(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	drug.ID = res.InsertedID.(bson.ObjectID)
 	jsonOK(w, drug)
 }
 
@@ -153,7 +242,7 @@ func (h *DrugHandler) Update(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	_, err = mdb.Drugs().UpdateOne(ctx,
+	res, err := mdb.Drugs().UpdateOne(ctx,
 		bson.M{"_id": oid},
 		bson.M{"$set": bson.M{
 			"name":         input.Name,
@@ -175,6 +264,10 @@ func (h *DrugHandler) Update(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if res.MatchedCount == 0 {
+		jsonError(w, "drug not found", http.StatusNotFound)
 		return
 	}
 	jsonOK(w, map[string]bool{"ok": true})
@@ -239,6 +332,10 @@ func (h *DrugHandler) BulkImport(w http.ResponseWriter, r *http.Request) {
 		}
 		if inp.Stock < 0 {
 			result.Errors = append(result.Errors, BulkImportRowError{Row: row, Name: inp.Name, Message: "สต็อกต้องไม่ติดลบ"})
+			continue
+		}
+		if inp.Stock != 0 {
+			result.Errors = append(result.Errors, BulkImportRowError{Row: row, Name: inp.Name, Message: "สต็อกตั้งต้นต้องเป็น 0 และต้องรับเข้าผ่าน import หรือล็อต"})
 			continue
 		}
 		if inp.Type == "" {

@@ -42,7 +42,10 @@ func (h *KyHandler) ListKy9(w http.ResponseWriter, r *http.Request) {
 	}
 	defer cur.Close(ctx)
 	var rows []models.Ky9
-	cur.All(ctx, &rows)
+	if err := cur.All(ctx, &rows); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if rows == nil {
 		rows = []models.Ky9{}
 	}
@@ -66,7 +69,7 @@ func (h *KyHandler) AddKy9(w http.ResponseWriter, r *http.Request) {
 		Date: input.Date, DrugName: input.DrugName, RegNo: input.RegNo,
 		Unit: input.Unit, Qty: input.Qty, PricePerUnit: input.PricePerUnit,
 		TotalValue: input.PricePerUnit * float64(input.Qty),
-		Seller: input.Seller, InvoiceNo: input.InvoiceNo, CreatedAt: time.Now(),
+		Seller:     input.Seller, InvoiceNo: input.InvoiceNo, CreatedAt: time.Now(),
 	}
 	res, err := mdb.Ky9().InsertOne(ctx, doc)
 	if err != nil {
@@ -92,7 +95,10 @@ func (h *KyHandler) ListKy10(w http.ResponseWriter, r *http.Request) {
 	}
 	defer cur.Close(ctx)
 	var rows []models.Ky10
-	cur.All(ctx, &rows)
+	if err := cur.All(ctx, &rows); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if rows == nil {
 		rows = []models.Ky10{}
 	}
@@ -142,7 +148,10 @@ func (h *KyHandler) ListKy11(w http.ResponseWriter, r *http.Request) {
 	}
 	defer cur.Close(ctx)
 	var rows []models.Ky11
-	cur.All(ctx, &rows)
+	if err := cur.All(ctx, &rows); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if rows == nil {
 		rows = []models.Ky11{}
 	}
@@ -191,7 +200,10 @@ func (h *KyHandler) ListKy12(w http.ResponseWriter, r *http.Request) {
 	}
 	defer cur.Close(ctx)
 	var rows []models.Ky12
-	cur.All(ctx, &rows)
+	if err := cur.All(ctx, &rows); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if rows == nil {
 		rows = []models.Ky12{}
 	}

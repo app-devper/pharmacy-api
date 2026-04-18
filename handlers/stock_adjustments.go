@@ -3,12 +3,14 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
@@ -58,33 +60,40 @@ func (h *StockAdjustmentHandler) Create(w http.ResponseWriter, r *http.Request) 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	// Atomically increment stock and get the updated drug in one round-trip.
+	// Apply stock change and audit insert atomically.
 	var updated models.Drug
-	err = mdb.Drugs().FindOneAndUpdate(ctx,
-		bson.M{"_id": oid},
-		bson.M{"$inc": bson.M{"stock": input.Delta}},
-		options.FindOneAndUpdate().SetReturnDocument(options.After),
-	).Decode(&updated)
-	if err != nil {
+	if err := mdb.WithTransaction(ctx, func(txCtx context.Context) error {
+		filter := bson.M{"_id": oid}
+		if input.Delta < 0 {
+			filter["stock"] = bson.M{"$gte": -input.Delta}
+		}
+		if err := mdb.Drugs().FindOneAndUpdate(txCtx,
+			filter,
+			bson.M{"$inc": bson.M{"stock": input.Delta}},
+			options.FindOneAndUpdate().SetReturnDocument(options.After),
+		).Decode(&updated); err != nil {
+			return err
+		}
+
+		adj := models.StockAdjustment{
+			DrugID:    oid,
+			DrugName:  updated.Name,
+			Delta:     input.Delta,
+			Before:    updated.Stock - input.Delta,
+			After:     updated.Stock,
+			Reason:    input.Reason,
+			Note:      input.Note,
+			CreatedAt: time.Now(),
+		}
+		_, err := mdb.StockAdjustments().InsertOne(txCtx, adj)
+		return err
+	}); err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			jsonError(w, "drug not found or insufficient stock", http.StatusBadRequest)
+			return
+		}
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
-	}
-
-	// Insert audit log entry.
-	adj := models.StockAdjustment{
-		DrugID:    oid,
-		DrugName:  updated.Name,
-		Delta:     input.Delta,
-		Before:    updated.Stock - input.Delta,
-		After:     updated.Stock,
-		Reason:    input.Reason,
-		Note:      input.Note,
-		CreatedAt: time.Now(),
-	}
-	if _, err := mdb.StockAdjustments().InsertOne(ctx, adj); err != nil {
-		// Non-fatal: stock was already updated; log the error and continue.
-		// In production this could be retried or queued.
-		_ = err
 	}
 
 	jsonOK(w, updated)

@@ -58,10 +58,22 @@ func (h *ReportHandler) Summary(w http.ResponseWriter, r *http.Request) {
 	endOfDay := startOfDay.Add(24 * time.Hour)
 	startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 
-	todaySales := netSalesAmount(ctx, mdb, startOfDay, endOfDay)
-	monthSales := netSalesAmount(ctx, mdb, startOfMonth, endOfDay)
+	todaySales, err := netSalesAmount(ctx, mdb, startOfDay, endOfDay)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	monthSales, err := netSalesAmount(ctx, mdb, startOfMonth, endOfDay)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	todayBills := countDocs(ctx, mdb, bson.M{"sold_at": bson.M{"$gte": startOfDay, "$lt": endOfDay}})
-	stockValue := calcStockValue(ctx, mdb)
+	stockValue, err := calcStockValue(ctx, mdb)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	lowStock := int(countDrugs(ctx, mdb, bson.M{
 		"$expr": bson.M{"$and": bson.A{
 			bson.M{"$gt": bson.A{"$min_stock", 0}},
@@ -550,33 +562,38 @@ func netTotalsByDrug(ctx context.Context, d *db.MongoDB, from, to time.Time) (ma
 	return totals, nil
 }
 
-func netSalesAmount(ctx context.Context, d *db.MongoDB, from, to time.Time) float64 {
-	sales := sumSales(ctx, d, bson.M{"sold_at": bson.M{"$gte": from, "$lt": to}})
+func netSalesAmount(ctx context.Context, d *db.MongoDB, from, to time.Time) (float64, error) {
+	sales, err := sumSales(ctx, d, bson.M{"sold_at": bson.M{"$gte": from, "$lt": to}})
+	if err != nil {
+		return 0, err
+	}
 	returns, err := sumReturnRefunds(ctx, d, from, to)
 	if err != nil {
-		return sales
+		return 0, err
 	}
-	return sales - returns
+	return sales - returns, nil
 }
 
-func sumSales(ctx context.Context, d *db.MongoDB, filter bson.M) float64 {
+func sumSales(ctx context.Context, d *db.MongoDB, filter bson.M) (float64, error) {
 	pipeline := bson.A{
 		bson.M{"$match": notVoided(filter)},
 		bson.M{"$group": bson.M{"_id": nil, "total": bson.M{"$sum": "$total"}}},
 	}
 	cur, err := d.Sales().Aggregate(ctx, pipeline)
 	if err != nil {
-		return 0
+		return 0, err
 	}
 	defer cur.Close(ctx)
 	var res []struct {
 		Total float64 `bson:"total"`
 	}
-	cur.All(ctx, &res)
-	if len(res) == 0 {
-		return 0
+	if err := cur.All(ctx, &res); err != nil {
+		return 0, err
 	}
-	return res[0].Total
+	if len(res) == 0 {
+		return 0, nil
+	}
+	return res[0].Total, nil
 }
 
 func sumReturnRefunds(ctx context.Context, d *db.MongoDB, from, to time.Time) (float64, error) {
@@ -611,7 +628,7 @@ func countDrugs(ctx context.Context, d *db.MongoDB, filter bson.M) int64 {
 	return n
 }
 
-func calcStockValue(ctx context.Context, d *db.MongoDB) float64 {
+func calcStockValue(ctx context.Context, d *db.MongoDB) (float64, error) {
 	pipeline := bson.A{
 		bson.M{"$group": bson.M{
 			"_id":   nil,
@@ -620,15 +637,17 @@ func calcStockValue(ctx context.Context, d *db.MongoDB) float64 {
 	}
 	cur, err := d.Drugs().Aggregate(ctx, pipeline)
 	if err != nil {
-		return 0
+		return 0, err
 	}
 	defer cur.Close(ctx)
 	var res []struct {
 		Total float64 `bson:"total"`
 	}
-	cur.All(ctx, &res)
-	if len(res) == 0 {
-		return 0
+	if err := cur.All(ctx, &res); err != nil {
+		return 0, err
 	}
-	return res[0].Total
+	if len(res) == 0 {
+		return 0, nil
+	}
+	return res[0].Total, nil
 }

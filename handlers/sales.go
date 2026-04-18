@@ -189,14 +189,18 @@ func (h *SaleHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if customerID != nil {
-			if _, err := mdb.Customers().UpdateOne(txCtx,
+			updateRes, err := mdb.Customers().UpdateOne(txCtx,
 				bson.M{"_id": customerID},
 				bson.M{
 					"$inc": bson.M{"total_spent": total},
 					"$set": bson.M{"last_visit": now},
 				},
-			); err != nil {
+			)
+			if err != nil {
 				return err
+			}
+			if updateRes.MatchedCount == 0 {
+				return mongo.ErrNoDocuments
 			}
 		}
 
@@ -515,25 +519,60 @@ func (h *SaleHandler) Void(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 
+		retCur, err := mdb.DrugReturns().Find(txCtx, bson.M{"sale_id": oid})
+		if err != nil {
+			return err
+		}
+		defer retCur.Close(txCtx)
+
+		var returns []models.DrugReturn
+		if err := retCur.All(txCtx, &returns); err != nil {
+			return err
+		}
+
+		returnedByItem := make(map[bson.ObjectID]int, len(items))
+		refunded := 0.0
+		for _, ret := range returns {
+			refunded += ret.Refund
+			for _, item := range ret.Items {
+				returnedByItem[item.SaleItemID] += item.Qty
+			}
+		}
+
 		for _, item := range items {
+			restoreQty := item.Qty - returnedByItem[item.ID]
+			if restoreQty <= 0 {
+				continue
+			}
+
 			if _, err := mdb.Drugs().UpdateOne(txCtx,
 				bson.M{"_id": item.DrugID},
-				bson.M{"$inc": bson.M{"stock": item.Qty}},
+				bson.M{"$inc": bson.M{"stock": restoreQty}},
 			); err != nil {
 				return err
 			}
 
-			if err := h.restoreSaleItemLots(txCtx, mdb, item); err != nil {
+			restoreItem := item
+			restoreItem.Qty = restoreQty
+			if err := h.restoreSaleItemLots(txCtx, mdb, restoreItem); err != nil {
 				return err
 			}
 		}
 
 		if sale.CustomerID != nil {
-			if _, err := mdb.Customers().UpdateOne(txCtx,
+			remainingSpend := sale.Total - refunded
+			if remainingSpend <= 0 {
+				return nil
+			}
+			updateRes, err := mdb.Customers().UpdateOne(txCtx,
 				bson.M{"_id": sale.CustomerID},
-				bson.M{"$inc": bson.M{"total_spent": -sale.Total}},
-			); err != nil {
+				bson.M{"$inc": bson.M{"total_spent": -remainingSpend}},
+			)
+			if err != nil {
 				return err
+			}
+			if updateRes.MatchedCount == 0 {
+				return mongo.ErrNoDocuments
 			}
 		}
 
@@ -541,6 +580,10 @@ func (h *SaleHandler) Void(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		if errors.Is(err, errSaleAlreadyVoided) {
 			jsonError(w, err.Error(), http.StatusConflict)
+			return
+		}
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			jsonError(w, "referenced document not found", http.StatusBadRequest)
 			return
 		}
 		jsonError(w, err.Error(), http.StatusInternalServerError)

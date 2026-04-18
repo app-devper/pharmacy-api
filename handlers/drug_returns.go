@@ -118,6 +118,30 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	var ret models.DrugReturn
 	if err := mdb.WithTransaction(ctx, func(txCtx context.Context) error {
+		currentReturned := make(map[string]int)
+		retCur, err := mdb.DrugReturns().Find(txCtx, bson.M{"sale_id": oid})
+		if err != nil {
+			return fmt.Errorf("failed to load existing returns: %w", err)
+		}
+		var txReturns []models.DrugReturn
+		if err := retCur.All(txCtx, &txReturns); err != nil {
+			retCur.Close(txCtx)
+			return err
+		}
+		retCur.Close(txCtx)
+		for _, ret := range txReturns {
+			for _, ri := range ret.Items {
+				currentReturned[ri.SaleItemID.Hex()] += ri.Qty
+			}
+		}
+
+		for _, inp := range input.Items {
+			si := saleItemMap[inp.SaleItemID]
+			if inp.Qty+currentReturned[inp.SaleItemID] > si.Qty {
+				return fmt.Errorf("คืนเกินจำนวนที่ขาย: %s (ขายไป %d, คืนแล้ว %d)", si.DrugName, si.Qty, currentReturned[inp.SaleItemID])
+			}
+		}
+
 		now := time.Now()
 		today := now.Format("060102")
 		counterID := "RET-" + today

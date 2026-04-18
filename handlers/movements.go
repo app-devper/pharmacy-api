@@ -95,10 +95,16 @@ func (h *MovementsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	var mu sync.Mutex
 	var all []MovementEntry
+	var firstErr error
 	var wg sync.WaitGroup
 
-	addEntries := func(entries []MovementEntry) {
+	addEntries := func(entries []MovementEntry, err error) {
 		mu.Lock()
+		if err != nil && firstErr == nil {
+			firstErr = err
+			mu.Unlock()
+			return
+		}
 		all = append(all, entries...)
 		mu.Unlock()
 	}
@@ -140,6 +146,10 @@ func (h *MovementsHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	wg.Wait()
+	if firstErr != nil {
+		jsonError(w, firstErr.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	// sort by At descending
 	sort.Slice(all, func(i, j int) bool {
@@ -168,28 +178,30 @@ func (h *MovementsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 // ─── import ───────────────────────────────────────────────────────────────────
 
-func fetchImports(ctx context.Context, d *db.MongoDB, from, to time.Time, drugName string) []MovementEntry {
+func fetchImports(ctx context.Context, d *db.MongoDB, from, to time.Time, drugName string) ([]MovementEntry, error) {
 	filter := bson.M{
-		"import_date": bson.M{"$gte": from, "$lt": to},
+		"created_at": bson.M{"$gte": from, "$lt": to},
 	}
 	if drugName != "" {
 		filter["drug_name"] = bson.M{"$regex": regexp.QuoteMeta(drugName), "$options": "i"}
 	}
 	cur, err := d.DrugLots().Find(ctx, filter)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer cur.Close(ctx)
 
 	var results []struct {
-		ID         bson.ObjectID `bson:"_id"`
-		DrugID     bson.ObjectID `bson:"drug_id"`
-		DrugName   string        `bson:"drug_name"`
-		LotNumber  string        `bson:"lot_number"`
-		Quantity   int           `bson:"quantity"`
-		ImportDate time.Time     `bson:"import_date"`
+		ID        bson.ObjectID `bson:"_id"`
+		DrugID    bson.ObjectID `bson:"drug_id"`
+		DrugName  string        `bson:"drug_name"`
+		LotNumber string        `bson:"lot_number"`
+		Quantity  int           `bson:"quantity"`
+		CreatedAt time.Time     `bson:"created_at"`
 	}
-	cur.All(ctx, &results)
+	if err := cur.All(ctx, &results); err != nil {
+		return nil, err
+	}
 
 	entries := make([]MovementEntry, 0, len(results))
 	for _, r := range results {
@@ -200,15 +212,15 @@ func fetchImports(ctx context.Context, d *db.MongoDB, from, to time.Time, drugNa
 			DrugName:  r.DrugName,
 			Delta:     r.Quantity,
 			Reference: r.LotNumber,
-			At:        r.ImportDate,
+			At:        r.CreatedAt,
 		})
 	}
-	return entries
+	return entries, nil
 }
 
 // ─── sale ─────────────────────────────────────────────────────────────────────
 
-func fetchSales(ctx context.Context, d *db.MongoDB, from, to time.Time, drugName string) []MovementEntry {
+func fetchSales(ctx context.Context, d *db.MongoDB, from, to time.Time, drugName string) ([]MovementEntry, error) {
 	pipeline := mongo.Pipeline{
 		// join with sales to get sold_at, bill_no, voided
 		{{Key: "$lookup", Value: bson.M{
@@ -229,7 +241,7 @@ func fetchSales(ctx context.Context, d *db.MongoDB, from, to time.Time, drugName
 
 	cur, err := d.SaleItems().Aggregate(ctx, pipeline)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer cur.Close(ctx)
 
@@ -243,7 +255,9 @@ func fetchSales(ctx context.Context, d *db.MongoDB, from, to time.Time, drugName
 			SoldAt time.Time `bson:"sold_at"`
 		} `bson:"sale"`
 	}
-	cur.All(ctx, &results)
+	if err := cur.All(ctx, &results); err != nil {
+		return nil, err
+	}
 
 	entries := make([]MovementEntry, 0, len(results))
 	for _, r := range results {
@@ -257,12 +271,12 @@ func fetchSales(ctx context.Context, d *db.MongoDB, from, to time.Time, drugName
 			At:        r.Sale.SoldAt,
 		})
 	}
-	return entries
+	return entries, nil
 }
 
 // ─── return ───────────────────────────────────────────────────────────────────
 
-func fetchReturns(ctx context.Context, d *db.MongoDB, from, to time.Time, drugName string) []MovementEntry {
+func fetchReturns(ctx context.Context, d *db.MongoDB, from, to time.Time, drugName string) ([]MovementEntry, error) {
 	matchName := bson.M{}
 	if drugName != "" {
 		matchName = bson.M{
@@ -282,7 +296,7 @@ func fetchReturns(ctx context.Context, d *db.MongoDB, from, to time.Time, drugNa
 
 	cur, err := d.DrugReturns().Aggregate(ctx, pipeline)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer cur.Close(ctx)
 
@@ -296,7 +310,9 @@ func fetchReturns(ctx context.Context, d *db.MongoDB, from, to time.Time, drugNa
 			Qty      int           `bson:"qty"`
 		} `bson:"items"`
 	}
-	cur.All(ctx, &results)
+	if err := cur.All(ctx, &results); err != nil {
+		return nil, err
+	}
 
 	entries := make([]MovementEntry, 0, len(results))
 	for _, r := range results {
@@ -310,12 +326,12 @@ func fetchReturns(ctx context.Context, d *db.MongoDB, from, to time.Time, drugNa
 			At:        r.ReturnedAt,
 		})
 	}
-	return entries
+	return entries, nil
 }
 
 // ─── adjustment ───────────────────────────────────────────────────────────────
 
-func fetchAdjustments(ctx context.Context, d *db.MongoDB, from, to time.Time, drugName string) []MovementEntry {
+func fetchAdjustments(ctx context.Context, d *db.MongoDB, from, to time.Time, drugName string) ([]MovementEntry, error) {
 	filter := bson.M{
 		"created_at": bson.M{"$gte": from, "$lt": to},
 	}
@@ -325,7 +341,7 @@ func fetchAdjustments(ctx context.Context, d *db.MongoDB, from, to time.Time, dr
 
 	cur, err := d.StockAdjustments().Find(ctx, filter)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer cur.Close(ctx)
 
@@ -338,7 +354,9 @@ func fetchAdjustments(ctx context.Context, d *db.MongoDB, from, to time.Time, dr
 		Note      string        `bson:"note"`
 		CreatedAt time.Time     `bson:"created_at"`
 	}
-	cur.All(ctx, &results)
+	if err := cur.All(ctx, &results); err != nil {
+		return nil, err
+	}
 
 	entries := make([]MovementEntry, 0, len(results))
 	for _, r := range results {
@@ -353,12 +371,12 @@ func fetchAdjustments(ctx context.Context, d *db.MongoDB, from, to time.Time, dr
 			At:        r.CreatedAt,
 		})
 	}
-	return entries
+	return entries, nil
 }
 
 // ─── writeoff ─────────────────────────────────────────────────────────────────
 
-func fetchWriteoffs(ctx context.Context, d *db.MongoDB, from, to time.Time, drugName string) []MovementEntry {
+func fetchWriteoffs(ctx context.Context, d *db.MongoDB, from, to time.Time, drugName string) ([]MovementEntry, error) {
 	filter := bson.M{
 		"created_at": bson.M{"$gte": from, "$lt": to},
 	}
@@ -368,7 +386,7 @@ func fetchWriteoffs(ctx context.Context, d *db.MongoDB, from, to time.Time, drug
 
 	cur, err := d.LotWriteoffs().Find(ctx, filter)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer cur.Close(ctx)
 
@@ -380,7 +398,9 @@ func fetchWriteoffs(ctx context.Context, d *db.MongoDB, from, to time.Time, drug
 		Qty       int           `bson:"qty"`
 		CreatedAt time.Time     `bson:"created_at"`
 	}
-	cur.All(ctx, &results)
+	if err := cur.All(ctx, &results); err != nil {
+		return nil, err
+	}
 
 	entries := make([]MovementEntry, 0, len(results))
 	for _, r := range results {
@@ -394,5 +414,5 @@ func fetchWriteoffs(ctx context.Context, d *db.MongoDB, from, to time.Time, drug
 			At:        r.CreatedAt,
 		})
 	}
-	return entries
+	return entries, nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -34,7 +35,7 @@ func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 
 	filter := bson.M{}
 	if month != "" {
-		filter = bson.M{"date": bson.M{"$regex": "^" + month}}
+		filter = bson.M{"date": bson.M{"$regex": "^" + regexp.QuoteMeta(month)}}
 	}
 	sortOpt := options.Find().SetSort(bson.D{{Key: "date", Value: 1}})
 
@@ -50,7 +51,10 @@ func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var rows []models.Ky9
-		cur.All(ctx, &rows)
+		if err := cur.All(ctx, &rows); err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		b, e := pdf.GenerateKy9(rows, month)
 		if e != nil {
 			jsonError(w, e.Error(), http.StatusInternalServerError)
@@ -68,7 +72,10 @@ func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var rows []models.Ky10
-		cur.All(ctx, &rows)
+		if err := cur.All(ctx, &rows); err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		b, e := pdf.GenerateKy10(rows, month)
 		if e != nil {
 			jsonError(w, e.Error(), http.StatusInternalServerError)
@@ -86,7 +93,10 @@ func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var rows []models.Ky11
-		cur.All(ctx, &rows)
+		if err := cur.All(ctx, &rows); err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		b, e := pdf.GenerateKy11(rows, month)
 		if e != nil {
 			jsonError(w, e.Error(), http.StatusInternalServerError)
@@ -104,7 +114,10 @@ func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var rows []models.Ky12
-		cur.All(ctx, &rows)
+		if err := cur.All(ctx, &rows); err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		b, e := pdf.GenerateKy12(rows, month)
 		if e != nil {
 			jsonError(w, e.Error(), http.StatusInternalServerError)

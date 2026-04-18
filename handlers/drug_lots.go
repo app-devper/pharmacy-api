@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
@@ -86,7 +88,7 @@ func (h *DrugLotHandler) AddLot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	expiry, err := time.Parse("2006-01-02", input.ExpiryDate)
+	expiry, err := time.ParseInLocation("2006-01-02", input.ExpiryDate, time.Local)
 	if err != nil {
 		jsonError(w, "expiry_date must be YYYY-MM-DD", http.StatusBadRequest)
 		return
@@ -94,9 +96,12 @@ func (h *DrugLotHandler) AddLot(w http.ResponseWriter, r *http.Request) {
 
 	importDate := time.Now()
 	if input.ImportDate != "" {
-		if parsed, err := time.ParseInLocation("2006-01-02", input.ImportDate, time.Local); err == nil {
-			importDate = parsed
+		parsed, err := time.ParseInLocation("2006-01-02", input.ImportDate, time.Local)
+		if err != nil {
+			jsonError(w, "import_date must be YYYY-MM-DD", http.StatusBadRequest)
+			return
 		}
+		importDate = parsed
 	}
 
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
@@ -133,12 +138,22 @@ func (h *DrugLotHandler) AddLot(w http.ResponseWriter, r *http.Request) {
 		}
 		lot.ID = res.InsertedID.(bson.ObjectID)
 
-		_, err = mdb.Drugs().UpdateOne(txCtx,
+		updateRes, err := mdb.Drugs().UpdateOne(txCtx,
 			bson.M{"_id": drugOID},
 			bson.M{"$inc": bson.M{"stock": input.Quantity}},
 		)
-		return err
+		if err != nil {
+			return err
+		}
+		if updateRes.MatchedCount == 0 {
+			return mongo.ErrNoDocuments
+		}
+		return nil
 	}); err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			jsonError(w, "drug not found", http.StatusNotFound)
+			return
+		}
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -201,35 +216,13 @@ func (h *DrugLotHandler) Expiring(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Batch-fetch drug names for all unique DrugIDs
-	drugIDSet := map[bson.ObjectID]struct{}{}
-	for _, l := range lots {
-		drugIDSet[l.DrugID] = struct{}{}
-	}
-	ids := make([]bson.ObjectID, 0, len(drugIDSet))
-	for id := range drugIDSet {
-		ids = append(ids, id)
-	}
-	drugCur, err := mdb.Drugs().Find(ctx, bson.M{"_id": bson.M{"$in": ids}},
-		options.Find().SetProjection(bson.M{"_id": 1, "name": 1}),
-	)
-	nameMap := map[bson.ObjectID]string{}
-	if err == nil {
-		var drugs []models.Drug
-		drugCur.All(ctx, &drugs)
-		drugCur.Close(ctx)
-		for _, d := range drugs {
-			nameMap[d.ID] = d.Name
-		}
-	}
-
 	result := make([]models.ExpiringLotItem, 0, len(lots))
 	for _, l := range lots {
 		daysLeft := int(l.ExpiryDate.Sub(now).Hours() / 24)
 		result = append(result, models.ExpiringLotItem{
 			ID:         l.ID,
 			DrugID:     l.DrugID,
-			DrugName:   nameMap[l.DrugID],
+			DrugName:   l.DrugName,
 			LotNumber:  l.LotNumber,
 			ExpiryDate: l.ExpiryDate,
 			Remaining:  l.Remaining,
@@ -259,16 +252,21 @@ func (h *DrugLotHandler) WriteoffLots(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	writtenOff := 0
+	failures := make([]map[string]string, 0)
 	for _, rawID := range input.LotIDs {
 		lotOID, err := bson.ObjectIDFromHex(rawID)
 		if err != nil {
+			failures = append(failures, map[string]string{
+				"lot_id": rawID,
+				"error":  "invalid lot id",
+			})
 			continue
 		}
 
 		if err := mdb.WithTransaction(ctx, func(txCtx context.Context) error {
 			var lot models.DrugLot
 			if err := mdb.DrugLots().FindOne(txCtx, bson.M{"_id": lotOID}).Decode(&lot); err != nil {
-				return err // not found — skip via outer continue
+				return err
 			}
 
 			res, err := mdb.DrugLots().DeleteOne(txCtx, bson.M{"_id": lotOID})
@@ -280,11 +278,15 @@ func (h *DrugLotHandler) WriteoffLots(w http.ResponseWriter, r *http.Request) {
 			}
 
 			if lot.Remaining > 0 {
-				if _, err := mdb.Drugs().UpdateOne(txCtx,
+				updateRes, err := mdb.Drugs().UpdateOne(txCtx,
 					bson.M{"_id": lot.DrugID},
 					bson.M{"$inc": bson.M{"stock": -lot.Remaining}},
-				); err != nil {
+				)
+				if err != nil {
 					return err
+				}
+				if updateRes.MatchedCount == 0 {
+					return mongo.ErrNoDocuments
 				}
 			}
 
@@ -299,13 +301,30 @@ func (h *DrugLotHandler) WriteoffLots(w http.ResponseWriter, r *http.Request) {
 			})
 			return err
 		}); err != nil {
+			msg := err.Error()
+			if errors.Is(err, mongo.ErrNoDocuments) {
+				msg = "lot not found"
+			}
+			failures = append(failures, map[string]string{
+				"lot_id": rawID,
+				"error":  msg,
+			})
 			continue
 		}
 
 		writtenOff++
 	}
 
-	jsonOK(w, map[string]int{"written_off": writtenOff})
+	status := http.StatusOK
+	if len(failures) > 0 {
+		status = http.StatusConflict
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"written_off": writtenOff,
+		"failed":      failures,
+	})
 }
 
 // DeleteLot removes a lot and decrements drug.stock by lot.Remaining.
@@ -347,18 +366,26 @@ func (h *DrugLotHandler) DeleteLot(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		if res.DeletedCount == 0 {
-			return fmt.Errorf("lot not found or already deleted")
+			return mongo.ErrNoDocuments
 		}
 		if lot.Remaining > 0 {
-			if _, err := mdb.Drugs().UpdateOne(txCtx,
+			updateRes, err := mdb.Drugs().UpdateOne(txCtx,
 				bson.M{"_id": drugOID},
 				bson.M{"$inc": bson.M{"stock": -lot.Remaining}},
-			); err != nil {
+			)
+			if err != nil {
 				return err
+			}
+			if updateRes.MatchedCount == 0 {
+				return mongo.ErrNoDocuments
 			}
 		}
 		return nil
 	}); err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			jsonError(w, "lot not found", http.StatusNotFound)
+			return
+		}
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
