@@ -107,14 +107,21 @@ Authorization: Bearer <token>
 
 | Method | Path | คำอธิบาย |
 |--------|------|-----------|
-| `GET` | `/api/drugs` | รายการยาทั้งหมด |
-| `GET` | `/api/drugs/low-stock` | ยาที่สต็อกต่ำ |
-| `POST` | `/api/drugs` | เพิ่มยาใหม่ |
+| `GET` | `/api/drugs` | รายการยาทั้งหมด (รองรับ `?fields=compact`) |
+| `GET` | `/api/drugs/low-stock` | ยาที่สต็อกต่ำ (threshold = `min_stock` หรือ `20` ถ้าไม่ตั้ง) |
+| `POST` | `/api/drugs` | เพิ่มยาใหม่ (ต้องมี `create_lot` เมื่อ `stock > 0`) |
 | `PUT` | `/api/drugs/:id` | แก้ไขข้อมูลยา |
 | `POST` | `/api/drugs/bulk` | นำเข้ายาจาก Excel สูงสุด 1,000 รายการ |
+| `GET` | `/api/drugs/reorder-suggestions` | แนะนำสั่งซื้อ (ADMIN) |
+
+**Projection** — `GET /api/drugs?fields=compact` คืนเฉพาะ `id, name, price, cost_price, stock, barcode, reg_no, unit, report_types` เพื่อลด payload สำหรับ client ที่ไม่ต้องการข้อมูลเต็ม
+
+**POST /api/drugs** — ถ้า `stock > 0` ต้องส่ง `create_lot: { lot_number, expiry_date, quantity, ... }` ไปพร้อมกัน → backend สร้าง Drug + DrugLot ใน transaction เดียวกัน · `create_lot.quantity` เป็นค่าที่ใช้เป็น `drug.stock` · `expiry_date` ต้องอยู่หลังวันนี้
 
 **Bulk Import** — Request: `{ "drugs": [DrugInput, ...] }` · Response: `{ "imported": N, "errors": [{ "row": N, "name": "...", "message": "..." }] }`
-ข้อผิดพลาดต่อแถวไม่หยุด batch — รายการที่สำเร็จถูก insert ต่อไป
+ข้อผิดพลาดต่อแถวไม่หยุด batch — รายการที่สำเร็จถูก insert ต่อไป · `stock < 0` จะถูก clamp เป็น `0` · `stock > 0` ยอมรับได้โดยไม่ต้องมี lot (ต่างจาก `POST /api/drugs` ที่เข้มงวดกว่า)
+
+**Reorder Suggestions** — `GET /api/drugs/reorder-suggestions?days=30&lookahead=14` **sales-driven** — พิจารณาเฉพาะยาที่มีการขายในช่วง `days` เท่านั้น (ยาที่ขายช้า/ไม่เคยขายจะถูกข้าม ไม่ว่า `min_stock` จะเป็นเท่าไหร่) · คำนวณ `avg_daily_sale = qty_sold / days` → `projected_need = ceil(avg_daily × lookahead)` · คืนยาที่ `current_stock < projected_need` พร้อม `suggested_qty = projected_need − current_stock` · เรียง out-of-stock ก่อน แล้วตาม `days_left` น้อยสุด
 
 ### Stock Adjustments
 
@@ -179,12 +186,15 @@ Authorization: Bearer <token>
 | Method | Path | คำอธิบาย |
 |--------|------|-----------|
 | `GET` | `/api/report/summary` | สรุปภาพรวม |
-| `GET` | `/api/report/daily` | ยอดขายรายวัน |
-| `GET` | `/api/report/eod` | สรุปปิดยอดประจำวัน |
-| `GET` | `/api/report/profit` | รายงานกำไร |
+| `GET` | `/api/report/dashboard` | รวม summary + daily + monthly + recent_sales ใน 1 request |
+| `GET` | `/api/report/daily` | ยอดขายรายวัน (default 7 วัน) |
+| `GET` | `/api/report/monthly` | สรุปรายเดือน (default 12 เดือน) |
 | `GET` | `/api/report/top-drugs` | ยาขายดี |
 | `GET` | `/api/report/slow-drugs` | ยาขายช้า |
-| `GET` | `/api/report/monthly` | สรุปรายเดือน |
+| `GET` | `/api/report/eod` | สรุปปิดยอดประจำวัน |
+| `GET` | `/api/report/profit` | รายงานกำไร |
+
+**Dashboard** — `GET /api/report/dashboard?days=7` ใช้ goroutine + `sync.WaitGroup` fetch parallel 4 dataset (summary, daily, monthly 12m, recent 5 sales) → ลด HTTP round-trip จาก 5-6 requests เหลือ 1 request สำหรับ ReportPage initial load
 
 ### KY Forms
 
@@ -227,7 +237,7 @@ Bootstrap (main.go): `000` ถูก warm-up โดย `CreateIndexesForClient("
 
 ### Endpoints ที่ต้องการ ADMIN หรือ SUPER
 
-- `POST /api/drugs`, `PUT /api/drugs/:id`, `POST /api/drugs/bulk`
+- `POST /api/drugs`, `PUT /api/drugs/:id`, `POST /api/drugs/bulk`, `GET /api/drugs/reorder-suggestions`
 - `POST /api/drugs/:id/adjustments`, `POST /api/drugs/:id/lots`, `DELETE /api/drugs/:id/lots/:lot_id`, `POST /api/lots/writeoff`
 - `PUT /api/customers/:id`
 - `POST /api/sales/:id/void`
@@ -242,7 +252,7 @@ Bootstrap (main.go): `000` ถูก warm-up โดย `CreateIndexesForClient("
 `GET /api/drugs`, `GET /api/drugs/low-stock`, `GET /api/drugs/:id/lots`, `GET /api/lots/expiring`,
 `GET|POST /api/customers`, `GET /api/customers/:id/sales`,
 `GET|POST /api/sales`, `GET /api/sales/:id/items`, `POST /api/sales/:id/return`, `GET /api/sales/:id/returns`,
-`GET /api/report/summary`, `GET /api/report/daily`, `GET /api/report/monthly`, `GET /api/report/top-drugs`, `GET /api/report/slow-drugs`,
+`GET /api/report/summary`, `GET /api/report/dashboard`, `GET /api/report/daily`, `GET /api/report/monthly`, `GET /api/report/top-drugs`, `GET /api/report/slow-drugs`,
 `GET /api/movements`
 
 ---
@@ -258,17 +268,19 @@ type Drug struct {
     GenericName string         // ชื่อสามัญ
     Type        string         // ประเภทยา
     Strength    string         // ขนาดยา เช่น "500mg"
-    Barcode     string         // บาร์โค้ด (sparse unique index — ว่างได้; scanner fallback ใช้ RegNo)
+    Barcode     string         // บาร์โค้ด (partial unique index — ว่างได้; scanner fallback ใช้ RegNo)
     SellPrice   float64        // ราคาขาย (bson:"price" สำหรับ backward compat)
     CostPrice   float64        // ราคาทุน
-    Stock       int            // จำนวนคงเหลือรวม
-    MinStock    int            // จุดสั่งซื้อขั้นต่ำ
+    Stock       int            // จำนวนคงเหลือรวม (= Σ DrugLot.Remaining เมื่อใช้ lot)
+    MinStock    int            // จุดสั่งซื้อขั้นต่ำ (0 = ใช้ default 20 สำหรับ low-stock alert)
     RegNo       string         // เลขทะเบียนยา
     Unit        string         // หน่วย เช่น "เม็ด", "แคปซูล"
     ReportTypes []string       // ["ky9", "ky10", "ky11", "ky12"]
     CreatedAt   time.Time      // วันที่สร้าง
 }
 ```
+
+**การสร้างยา** — `POST /api/drugs` เข้มงวด: ถ้า `stock > 0` ต้องมี `create_lot` ไปด้วยเสมอ → backend ทำ transaction สร้าง Drug + DrugLot พร้อมกัน จึงการันตีว่า `drug.stock` มาพร้อม lot จริงเสมอ (FEFO ทำงานถูก) · `POST /api/drugs/bulk` ผ่อนคลายกฎนี้ — ยอม import ยาที่มี stock ค้างไว้ก่อน แล้วไปเพิ่ม lot ภายหลัง
 
 ### Drug Lot (FEFO)
 
@@ -310,15 +322,20 @@ type Sale struct {
 }
 
 type SaleItem struct {
-    ID       bson.ObjectID  // id
-    SaleID   bson.ObjectID  // อ้างอิงบิล
-    DrugID   bson.ObjectID  // อ้างอิงยา
-    DrugName string         // ชื่อยา
-    Qty      int            // จำนวน
-    Price    float64        // ราคาต่อหน่วย
-    Subtotal float64        // รวม
+    ID            bson.ObjectID  // id
+    SaleID        bson.ObjectID  // อ้างอิงบิล
+    DrugID        bson.ObjectID  // อ้างอิงยา
+    DrugName      string         // ชื่อยา
+    Qty           int            // จำนวน
+    Price         float64        // ราคาต่อหน่วยหลังหักส่วนลดแล้ว
+    OriginalPrice float64        // ราคาขายเดิม (ก่อนลด)
+    ItemDiscount  float64        // ส่วนลดต่อหน่วย
+    Subtotal      float64        // รวม (Price × Qty)
+    CostSubtotal  float64        // ต้นทุนรวม
 }
 ```
+
+`SaleResponse` ที่ส่งกลับจาก `POST /api/sales` มี `stock_updates: [{drug_id, new_stock}]` เพื่อให้ client อัปเดต state ของ drug ที่ขายไปโดยไม่ต้อง refetch ทั้ง list
 
 ### Customer
 
@@ -326,13 +343,15 @@ type SaleItem struct {
 type Customer struct {
     ID         bson.ObjectID  // id
     Name       string         // ชื่อ
-    Phone      string         // เบอร์โทร
+    Phone      string         // เบอร์โทร (partial unique index — ว่างได้, ซ้ำไม่ได้)
     Disease    string         // โรคประจำตัว
     TotalSpent float64        // ยอดซื้อสะสม
     LastVisit  *time.Time     // เข้าร้านล่าสุด
     CreatedAt  time.Time      // วันที่สร้าง
 }
 ```
+
+**Duplicate phone** — ตั้งแต่เพิ่ม partial unique index บน `phone` (เฉพาะ non-empty) → `POST`/`PUT /api/customers` จะคืน `409 Conflict` ถ้าเบอร์นี้มีอยู่ในระบบแล้ว
 
 ### Supplier
 
@@ -441,9 +460,9 @@ type ReportSummary struct {
     TodaySales float64  // ยอดขายวันนี้
     TodayBills int      // จำนวนบิลวันนี้
     MonthSales float64  // ยอดขายเดือนนี้
-    StockValue float64  // มูลค่าสต็อก
-    LowStock   int      // จำนวนยาที่สต็อกต่ำ
-    OutStock   int      // จำนวนยาที่หมด
+    StockValue float64  // มูลค่าสต็อก (= Σ cost_price × stock)
+    LowStock   int      // ยาที่ stock ∈ (0, threshold]; threshold = min_stock หรือ 20
+    OutStock   int      // ยาที่ stock = 0
 }
 
 type EodReport struct {
@@ -467,5 +486,26 @@ type MonthlyData struct {
     Revenue float64  // รายได้
     Cost    float64  // ต้นทุน
     Profit  float64  // กำไร
+}
+
+type Dashboard struct {
+    Summary     ReportSummary   // สรุปภาพรวม (ดูด้านบน)
+    Daily       []DailyData     // ยอดขายรายวัน N วัน
+    Monthly     []MonthlyData   // สรุป 12 เดือนล่าสุด
+    RecentSales []Sale          // 5 บิลล่าสุด
+}
+
+type ReorderSuggestion struct {
+    DrugID       string   // hex id
+    DrugName     string
+    Unit         string
+    CurrentStock int
+    MinStock     int
+    QtySold      int      // ยอดขายรวมในช่วง lookback (ต้อง > 0 ถึงจะเข้า list)
+    AvgDailySale float64  // = qty_sold / days
+    DaysLeft     float64  // = current_stock / avg_daily
+    SuggestedQty int      // = ceil(avg_daily × lookahead) − current_stock
+    CostPrice    float64
+    SellPrice    float64
 }
 ```

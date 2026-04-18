@@ -429,10 +429,16 @@ func (h *DrugHandler) LowStock(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, drugs)
 }
 
-// ReorderSuggestions computes per-drug reorder advice from recent sales history.
+// ReorderSuggestions — sales-driven reorder advice.
+//
+// Only drugs with recorded sales in the lookback window are considered (slow/dead
+// stock is ignored regardless of min_stock). For each active drug we compute the
+// projected demand over `lookahead` days from the average daily sale rate, then
+// suggest enough to cover that demand minus what's already on hand.
+//
 // Query params:
 //   - days       (default 30)   lookback window for averaging sales
-//   - lookahead  (default 14)   target cover days (suggest qty = avg_daily * lookahead - stock)
+//   - lookahead  (default 14)   target cover days; suggest = ceil(avg_daily × lookahead) − stock
 //
 // GET /api/drugs/reorder-suggestions
 func (h *DrugHandler) ReorderSuggestions(w http.ResponseWriter, r *http.Request) {
@@ -459,8 +465,24 @@ func (h *DrugHandler) ReorderSuggestions(w http.ResponseWriter, r *http.Request)
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if len(totals) == 0 {
+		jsonOK(w, []models.ReorderSuggestion{})
+		return
+	}
 
-	cur, err := mdb.Drugs().Find(ctx, bson.M{})
+	// Batch-fetch only the drugs that actually had sales
+	ids := make([]bson.ObjectID, 0, len(totals))
+	for id, t := range totals {
+		if t != nil && t.Qty > 0 {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		jsonOK(w, []models.ReorderSuggestion{})
+		return
+	}
+
+	cur, err := mdb.Drugs().Find(ctx, bson.M{"_id": bson.M{"$in": ids}})
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -472,47 +494,23 @@ func (h *DrugHandler) ReorderSuggestions(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	const defaultThreshold = 20
-	const noSalesDaysLeft = 9999.0 // sentinel for "no sales / infinite cover"
-
 	out := make([]models.ReorderSuggestion, 0, len(drugs))
 	for _, d := range drugs {
-		qtySold := 0
-		if t := totals[d.ID]; t != nil && t.Qty > 0 {
-			qtySold = t.Qty
+		t := totals[d.ID]
+		if t == nil || t.Qty <= 0 {
+			continue // sales-driven: skip anything that never sold
 		}
+		qtySold := t.Qty
 		avgDaily := float64(qtySold) / float64(days)
 
-		threshold := d.MinStock
-		if threshold <= 0 {
-			threshold = defaultThreshold
+		projectedNeed := int(math.Ceil(avgDaily * float64(lookahead)))
+		if d.Stock >= projectedNeed {
+			continue // stock already covers the next `lookahead` days
 		}
 
-		daysLeft := noSalesDaysLeft
+		daysLeft := 0.0
 		if avgDaily > 0 {
 			daysLeft = float64(d.Stock) / avgDaily
-		}
-
-		suggested := int(math.Ceil(avgDaily*float64(lookahead))) - d.Stock
-		if suggested < 0 {
-			suggested = 0
-		}
-
-		// Include a drug in the suggestion list when any of:
-		//  - out of stock AND had recent sales
-		//  - stock at/below threshold (regardless of sales)
-		//  - cover days (stock / avg_daily) is less than half the lookahead
-		include := false
-		switch {
-		case d.Stock == 0 && qtySold > 0:
-			include = true
-		case d.Stock <= threshold:
-			include = true
-		case daysLeft < float64(lookahead)/2:
-			include = true
-		}
-		if !include {
-			continue
 		}
 
 		out = append(out, models.ReorderSuggestion{
@@ -524,13 +522,13 @@ func (h *DrugHandler) ReorderSuggestions(w http.ResponseWriter, r *http.Request)
 			QtySold:      qtySold,
 			AvgDailySale: avgDaily,
 			DaysLeft:     daysLeft,
-			SuggestedQty: suggested,
+			SuggestedQty: projectedNeed - d.Stock,
 			CostPrice:    d.CostPrice,
 			SellPrice:    d.SellPrice,
 		})
 	}
 
-	// Sort: urgency first (stock=0 with sales → smallest days_left → min_stock breaches last)
+	// Sort: out-of-stock first, then smallest days_left (most urgent first)
 	sort.SliceStable(out, func(i, j int) bool {
 		if (out[i].CurrentStock == 0) != (out[j].CurrentStock == 0) {
 			return out[i].CurrentStock == 0
