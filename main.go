@@ -44,9 +44,10 @@ func main() {
 	ah := handlers.NewStockAdjustmentHandler(manager)
 	reth := handlers.NewReturnHandler(manager)
 	mvh := handlers.NewMovementsHandler(manager)
+	seth := handlers.NewSettingsHandler(manager)
 
 	r := routes.Setup(
-		dh, lh, ch, sh, rh, kh, eh, ih, suph, ah, reth, mvh,
+		dh, lh, ch, sh, rh, kh, eh, ih, suph, ah, reth, mvh, seth,
 		cfg.SecretKey, cfg.System,
 	)
 

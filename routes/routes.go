@@ -27,6 +27,7 @@ func Setup(
 	ah *handlers.StockAdjustmentHandler,
 	reth *handlers.ReturnHandler,
 	mvh *handlers.MovementsHandler,
+	seth *handlers.SettingsHandler,
 	secretKey string,
 	authSystem string,
 ) *chi.Mux {
@@ -68,6 +69,9 @@ func Setup(
 
 			// Movements (read-only audit)
 			r.Get("/movements", mvh.List)
+
+			// Settings (read-only for all authenticated users — receipts need store info)
+			r.Get("/settings", seth.Get)
 		})
 
 		// ── ADMIN + SUPER only ────────────────────────────────────
@@ -121,6 +125,9 @@ func Setup(
 
 			// PDF Export
 			r.Get("/export/{form}", eh.Export)
+
+			// Settings (write)
+			r.Put("/settings", seth.Update)
 		})
 	})
 

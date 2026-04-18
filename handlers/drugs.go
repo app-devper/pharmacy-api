@@ -399,14 +399,15 @@ func (h *DrugHandler) LowStock(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// Match report.go Summary semantics: low-stock = nearly out (stock > 0 and <= threshold).
-	// Threshold = min_stock if > 0, else DEFAULT_LOW_STOCK_THRESHOLD (20).
+	// Threshold = min_stock if > 0, else the tenant-configurable default (Settings.stock.low_stock_threshold).
 	// Drugs with stock == 0 are surfaced separately as "out of stock".
+	threshold := loadStockSettings(ctx, mdb).LowStockThreshold
 	cur, err := mdb.Drugs().Find(ctx,
 		bson.M{"$expr": bson.M{
 			"$and": bson.A{
 				bson.M{"$gt": bson.A{"$stock", 0}},
 				bson.M{"$lte": bson.A{"$stock", bson.M{"$cond": bson.A{
-					bson.M{"$gt": bson.A{"$min_stock", 0}}, "$min_stock", 20,
+					bson.M{"$gt": bson.A{"$min_stock", 0}}, "$min_stock", threshold,
 				}}}},
 			},
 		}},
@@ -442,15 +443,6 @@ func (h *DrugHandler) LowStock(w http.ResponseWriter, r *http.Request) {
 //
 // GET /api/drugs/reorder-suggestions
 func (h *DrugHandler) ReorderSuggestions(w http.ResponseWriter, r *http.Request) {
-	days := 30
-	if v, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil && v > 0 && v <= 365 {
-		days = v
-	}
-	lookahead := 14
-	if v, err := strconv.Atoi(r.URL.Query().Get("lookahead")); err == nil && v > 0 && v <= 180 {
-		lookahead = v
-	}
-
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
 		jsonError(w, "unauthorized client", http.StatusForbidden)
@@ -458,6 +450,17 @@ func (h *DrugHandler) ReorderSuggestions(w http.ResponseWriter, r *http.Request)
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
+
+	// Defaults come from tenant settings; query params still override per-request.
+	stockCfg := loadStockSettings(ctx, mdb)
+	days := stockCfg.ReorderDays
+	if v, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil && v > 0 && v <= 365 {
+		days = v
+	}
+	lookahead := stockCfg.ReorderLookahead
+	if v, err := strconv.Atoi(r.URL.Query().Get("lookahead")); err == nil && v > 0 && v <= 180 {
+		lookahead = v
+	}
 
 	from := time.Now().AddDate(0, 0, -days)
 	totals, err := netTotalsByDrug(ctx, mdb, from, time.Time{})

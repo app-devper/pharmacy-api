@@ -76,12 +76,13 @@ func (h *ReportHandler) Summary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// low-stock = 1 <= stock <= threshold,
-	// where threshold = min_stock (when > 0) else DEFAULT_LOW_STOCK_THRESHOLD (20).
+	// where threshold = min_stock (when > 0) else Settings.stock.low_stock_threshold.
+	lowThreshold := loadStockSettings(ctx, mdb).LowStockThreshold
 	lowStock := int(countDrugs(ctx, mdb, bson.M{
 		"$expr": bson.M{"$and": bson.A{
 			bson.M{"$gt": bson.A{"$stock", 0}},
 			bson.M{"$lte": bson.A{"$stock", bson.M{"$cond": bson.A{
-				bson.M{"$gt": bson.A{"$min_stock", 0}}, "$min_stock", 20,
+				bson.M{"$gt": bson.A{"$min_stock", 0}}, "$min_stock", lowThreshold,
 			}}}},
 		}},
 	}))
@@ -478,11 +479,12 @@ func (h *ReportHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		todayBills := countDocs(ctx, mdb, bson.M{"sold_at": bson.M{"$gte": startOfDay, "$lt": endOfDay}})
 		stockValue, err := calcStockValue(ctx, mdb)
 		if err != nil { setErr(err); return }
+		lowThreshold := loadStockSettings(ctx, mdb).LowStockThreshold
 		lowStock := int(countDrugs(ctx, mdb, bson.M{
 			"$expr": bson.M{"$and": bson.A{
 				bson.M{"$gt": bson.A{"$stock", 0}},
 				bson.M{"$lte": bson.A{"$stock", bson.M{"$cond": bson.A{
-					bson.M{"$gt": bson.A{"$min_stock", 0}}, "$min_stock", 20,
+					bson.M{"$gt": bson.A{"$min_stock", 0}}, "$min_stock", lowThreshold,
 				}}}},
 			}},
 		}))

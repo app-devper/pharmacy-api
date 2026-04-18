@@ -202,6 +202,7 @@ func (m *MongoDB) Suppliers() *mongo.Collection        { return m.db.Collection(
 func (m *MongoDB) StockAdjustments() *mongo.Collection { return m.db.Collection("stock_adjustments") }
 func (m *MongoDB) DrugReturns() *mongo.Collection      { return m.db.Collection("drug_returns") }
 func (m *MongoDB) LotWriteoffs() *mongo.Collection     { return m.db.Collection("lot_writeoffs") }
+func (m *MongoDB) Settings() *mongo.Collection         { return m.db.Collection("settings") }
 
 // ensureInitialized runs index creation for a tenant exactly once, best-effort.
 // Errors are logged but never propagated, so a single bad index (e.g. a unique
@@ -284,6 +285,13 @@ func (m *MongoDB) CreateIndexes(ctx context.Context) error {
 	// Index on drug_returns.sale_id
 	if _, err := m.DrugReturns().Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "sale_id", Value: 1}},
+	}); err != nil {
+		return err
+	}
+	// Unique index on settings.key — guarantees the singleton row cannot be duplicated.
+	if _, err := m.Settings().Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "key", Value: 1}},
+		Options: options.Index().SetUnique(true),
 	}); err != nil {
 		return err
 	}

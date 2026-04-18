@@ -162,13 +162,9 @@ func (h *DrugLotHandler) AddLot(w http.ResponseWriter, r *http.Request) {
 }
 
 // Expiring returns lots that still have remaining stock, filtered by expiry window.
-// GET /api/lots/expiring?days=60         — lots expiring within N days (default 60, includes already-expired)
+// GET /api/lots/expiring?days=60         — lots expiring within N days (default from Settings, includes already-expired)
 // GET /api/lots/expiring?expired_only=true — only lots whose expiry_date is already in the past
 func (h *DrugLotHandler) Expiring(w http.ResponseWriter, r *http.Request) {
-	days := 60
-	if d, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil && d > 0 {
-		days = d
-	}
 	expiredOnly := r.URL.Query().Get("expired_only") == "true"
 
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
@@ -178,6 +174,12 @@ func (h *DrugLotHandler) Expiring(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
+
+	// Default window comes from tenant settings; `?days=N` overrides per-request.
+	days := loadStockSettings(ctx, mdb).ExpiringDays
+	if d, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil && d > 0 {
+		days = d
+	}
 
 	now := time.Now()
 
