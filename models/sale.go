@@ -22,20 +22,24 @@ type Sale struct {
 }
 
 type SaleItem struct {
-	ID           bson.ObjectID `bson:"_id,omitempty" json:"id"`
-	SaleID       bson.ObjectID `bson:"sale_id"       json:"sale_id"`
-	DrugID       bson.ObjectID `bson:"drug_id"       json:"drug_id"`
-	DrugName     string        `bson:"drug_name"     json:"drug_name"`
-	Qty          int           `bson:"qty"           json:"qty"`
-	Price        float64       `bson:"price"         json:"price"`
-	Subtotal     float64       `bson:"subtotal"      json:"subtotal"`
-	CostSubtotal float64       `bson:"cost_subtotal" json:"cost_subtotal"`
+	ID            bson.ObjectID `bson:"_id,omitempty"     json:"id"`
+	SaleID        bson.ObjectID `bson:"sale_id"           json:"sale_id"`
+	DrugID        bson.ObjectID `bson:"drug_id"           json:"drug_id"`
+	DrugName      string        `bson:"drug_name"         json:"drug_name"`
+	Qty           int           `bson:"qty"               json:"qty"`
+	Price         float64       `bson:"price"             json:"price"` // effective per-unit price (= OriginalPrice - ItemDiscount)
+	OriginalPrice float64       `bson:"original_price"    json:"original_price"`
+	ItemDiscount  float64       `bson:"item_discount"     json:"item_discount"` // per-unit discount
+	Subtotal      float64       `bson:"subtotal"          json:"subtotal"`
+	CostSubtotal  float64       `bson:"cost_subtotal"     json:"cost_subtotal"`
 }
 
 type SaleItemInput struct {
-	DrugID string  `json:"drug_id"`
-	Qty    int     `json:"qty"`
-	Price  float64 `json:"price"`
+	DrugID        string  `json:"drug_id"`
+	Qty           int     `json:"qty"`
+	Price         float64 `json:"price"`
+	OriginalPrice float64 `json:"original_price"`
+	ItemDiscount  float64 `json:"item_discount"`
 }
 
 type SaleInput struct {

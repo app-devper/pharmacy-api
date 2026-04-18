@@ -29,12 +29,14 @@ func NewSaleHandler(d *db.Manager) *SaleHandler { return &SaleHandler{dbm: d} }
 var errSaleAlreadyVoided = errors.New("sale already voided")
 
 type preparedSaleItem struct {
-	Drug         models.Drug
-	DrugID       bson.ObjectID
-	Qty          int
-	Price        float64
-	Subtotal     float64
-	CostSubtotal float64
+	Drug          models.Drug
+	DrugID        bson.ObjectID
+	Qty           int
+	Price         float64 // effective per-unit price (OriginalPrice - ItemDiscount)
+	OriginalPrice float64
+	ItemDiscount  float64
+	Subtotal      float64
+	CostSubtotal  float64
 }
 
 func (h *SaleHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -231,6 +233,12 @@ func (h *SaleHandler) prepareSaleItems(ctx context.Context, mdb *db.MongoDB, inp
 		if input.Price < 0 {
 			return nil, 0, fmt.Errorf("price must be >= 0")
 		}
+		if input.OriginalPrice < 0 {
+			return nil, 0, fmt.Errorf("original_price must be >= 0")
+		}
+		if input.ItemDiscount < 0 {
+			return nil, 0, fmt.Errorf("item_discount must be >= 0")
+		}
 
 		drugID, err := bson.ObjectIDFromHex(input.DrugID)
 		if err != nil {
@@ -241,14 +249,29 @@ func (h *SaleHandler) prepareSaleItems(ctx context.Context, mdb *db.MongoDB, inp
 		if err := mdb.Drugs().FindOne(ctx, bson.M{"_id": drugID}).Decode(&drug); err != nil {
 			return nil, 0, err
 		}
-		subtotal += input.Price * float64(input.Qty)
+		// Back-compat: if client didn't send OriginalPrice, treat Price as the original
+		// and ItemDiscount as 0. Otherwise derive effective Price from (OriginalPrice - ItemDiscount).
+		originalPrice := input.OriginalPrice
+		itemDiscount := input.ItemDiscount
+		effectivePrice := input.Price
+		if originalPrice > 0 {
+			effectivePrice = originalPrice - itemDiscount
+			if effectivePrice < 0 {
+				effectivePrice = 0
+			}
+		} else {
+			originalPrice = effectivePrice
+		}
+		subtotal += effectivePrice * float64(input.Qty)
 		requiredByDrug[drugID] += input.Qty
 		items = append(items, preparedSaleItem{
-			Drug:     drug,
-			DrugID:   drugID,
-			Qty:      input.Qty,
-			Price:    input.Price,
-			Subtotal: input.Price * float64(input.Qty),
+			Drug:          drug,
+			DrugID:        drugID,
+			Qty:           input.Qty,
+			Price:         effectivePrice,
+			OriginalPrice: originalPrice,
+			ItemDiscount:  itemDiscount,
+			Subtotal:      effectivePrice * float64(input.Qty),
 		})
 	}
 
@@ -359,13 +382,15 @@ func (h *SaleHandler) applySaleItem(ctx context.Context, mdb *db.MongoDB, saleID
 	}
 	if len(lots) == 0 {
 		si := models.SaleItem{
-			SaleID:       saleID,
-			DrugID:       item.DrugID,
-			DrugName:     item.Drug.Name,
-			Qty:          item.Qty,
-			Price:        item.Price,
-			Subtotal:     item.Subtotal,
-			CostSubtotal: float64(item.Qty) * item.Drug.CostPrice,
+			SaleID:        saleID,
+			DrugID:        item.DrugID,
+			DrugName:      item.Drug.Name,
+			Qty:           item.Qty,
+			Price:         item.Price,
+			OriginalPrice: item.OriginalPrice,
+			ItemDiscount:  item.ItemDiscount,
+			Subtotal:      item.Subtotal,
+			CostSubtotal:  float64(item.Qty) * item.Drug.CostPrice,
 		}
 		if _, err := mdb.SaleItems().InsertOne(ctx, si); err != nil {
 			return err
@@ -406,13 +431,15 @@ func (h *SaleHandler) applySaleItem(ctx context.Context, mdb *db.MongoDB, saleID
 	}
 
 	si := models.SaleItem{
-		SaleID:       saleID,
-		DrugID:       item.DrugID,
-		DrugName:     item.Drug.Name,
-		Qty:          item.Qty,
-		Price:        item.Price,
-		Subtotal:     item.Subtotal,
-		CostSubtotal: costSubtotal,
+		SaleID:        saleID,
+		DrugID:        item.DrugID,
+		DrugName:      item.Drug.Name,
+		Qty:           item.Qty,
+		Price:         item.Price,
+		OriginalPrice: item.OriginalPrice,
+		ItemDiscount:  item.ItemDiscount,
+		Subtotal:      item.Subtotal,
+		CostSubtotal:  costSubtotal,
 	}
 	if _, err := mdb.SaleItems().InsertOne(ctx, si); err != nil {
 		return err

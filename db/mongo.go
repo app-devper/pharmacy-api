@@ -287,6 +287,16 @@ func (m *MongoDB) CreateIndexes(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
+	// Partial unique index on customers.phone — prevent duplicate phone numbers while
+	// still allowing multiple customers without a phone.
+	if _, err := m.Customers().Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "phone", Value: 1}},
+		Options: options.Index().SetUnique(true).SetPartialFilterExpression(
+			bson.M{"phone": bson.M{"$type": "string", "$gt": ""}},
+		),
+	}); err != nil {
+		return err
+	}
 	// Partial unique index on drugs.barcode — only enforced for non-empty string barcodes.
 	// A plain sparse index would still index empty strings (the field is always present
 	// because the bson tag has no omitempty), causing duplicate-key errors for multiple

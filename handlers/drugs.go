@@ -391,10 +391,13 @@ func (h *DrugHandler) LowStock(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
+	// Match report.go Summary semantics: low-stock = nearly out (stock in 1..min_stock).
+	// Drugs with stock == 0 are surfaced separately as "out of stock".
 	cur, err := mdb.Drugs().Find(ctx,
 		bson.M{"$expr": bson.M{
 			"$and": bson.A{
 				bson.M{"$gt": bson.A{"$min_stock", 0}},
+				bson.M{"$gt": bson.A{"$stock", 0}},
 				bson.M{"$lte": bson.A{"$stock", "$min_stock"}},
 			},
 		}},

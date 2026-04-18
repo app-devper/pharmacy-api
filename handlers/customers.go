@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -72,12 +73,16 @@ func (h *CustomerHandler) Add(w http.ResponseWriter, r *http.Request) {
 
 	cust := models.Customer{
 		Name:      input.Name,
-		Phone:     input.Phone,
+		Phone:     strings.TrimSpace(input.Phone),
 		Disease:   input.Disease,
 		CreatedAt: time.Now(),
 	}
 	res, err := mdb.Customers().InsertOne(ctx, cust)
 	if err != nil {
+		if isMongoDuplicate(err) {
+			jsonError(w, "เบอร์โทรนี้มีลูกค้าอยู่ในระบบแล้ว", http.StatusConflict)
+			return
+		}
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -120,7 +125,7 @@ func (h *CustomerHandler) Update(w http.ResponseWriter, r *http.Request) {
 		bson.M{"_id": oid},
 		bson.M{"$set": bson.M{
 			"name":    input.Name,
-			"phone":   input.Phone,
+			"phone":   strings.TrimSpace(input.Phone),
 			"disease": input.Disease,
 		}},
 		options.FindOneAndUpdate().SetReturnDocument(options.After),
@@ -128,6 +133,10 @@ func (h *CustomerHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			jsonError(w, "customer not found", http.StatusNotFound)
+			return
+		}
+		if isMongoDuplicate(err) {
+			jsonError(w, "เบอร์โทรนี้มีลูกค้าอยู่ในระบบแล้ว", http.StatusConflict)
 			return
 		}
 		jsonError(w, err.Error(), http.StatusInternalServerError)
