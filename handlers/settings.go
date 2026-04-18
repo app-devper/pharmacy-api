@@ -26,22 +26,24 @@ const settingsKey = "singleton"
 // loadStockSettings fetches the tenant's stock config. On any error (missing
 // document, DB down, decode failure) it silently falls back to built-in
 // defaults so calling handlers never break.
+//
+// Note on zero-values:
+//   - LowStockThreshold = 0 is a VALID explicit choice ("never flag low-stock")
+//     and is therefore preserved as-is from the DB.
+//   - ReorderDays / ReorderLookahead / ExpiringDays of 0 are not meaningful
+//     (can't compute a rate over 0 days), so they fall back to defaults.
 func loadStockSettings(ctx context.Context, mdb *db.MongoDB) models.StockSettings {
 	var s models.Settings
 	if err := mdb.Settings().FindOne(ctx, bson.M{"key": settingsKey}).Decode(&s); err != nil {
 		return models.DefaultSettings().Stock
 	}
-	// Fill zero values with defaults so older docs without the stock section still work.
-	if s.Stock.LowStockThreshold == 0 {
-		s.Stock.LowStockThreshold = models.DefaultLowStockThreshold
-	}
-	if s.Stock.ReorderDays == 0 {
+	if s.Stock.ReorderDays <= 0 {
 		s.Stock.ReorderDays = models.DefaultReorderDays
 	}
-	if s.Stock.ReorderLookahead == 0 {
+	if s.Stock.ReorderLookahead <= 0 {
 		s.Stock.ReorderLookahead = models.DefaultReorderLookahead
 	}
-	if s.Stock.ExpiringDays == 0 {
+	if s.Stock.ExpiringDays <= 0 {
 		s.Stock.ExpiringDays = models.DefaultExpiringDays
 	}
 	return s.Stock
@@ -108,13 +110,12 @@ func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Stock defaults — clamp to sane ranges; 0 falls back to built-in default.
+	// Stock defaults — clamp to sane ranges.
+	// low_stock_threshold = 0 is allowed (means "never flag low-stock unless
+	// the individual drug.min_stock is set"). Only negative is rejected.
 	if input.Stock.LowStockThreshold < 0 {
 		jsonError(w, "low_stock_threshold ต้องไม่ติดลบ", http.StatusBadRequest)
 		return
-	}
-	if input.Stock.LowStockThreshold == 0 {
-		input.Stock.LowStockThreshold = models.DefaultLowStockThreshold
 	}
 	if input.Stock.ReorderDays <= 0 {
 		input.Stock.ReorderDays = models.DefaultReorderDays
