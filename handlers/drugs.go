@@ -331,12 +331,7 @@ func (h *DrugHandler) BulkImport(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if inp.Stock < 0 {
-			result.Errors = append(result.Errors, BulkImportRowError{Row: row, Name: inp.Name, Message: "สต็อกต้องไม่ติดลบ"})
-			continue
-		}
-		if inp.Stock != 0 {
-			result.Errors = append(result.Errors, BulkImportRowError{Row: row, Name: inp.Name, Message: "สต็อกตั้งต้นต้องเป็น 0 และต้องรับเข้าผ่าน import หรือล็อต"})
-			continue
+			inp.Stock = 0 // clamp negative → 0
 		}
 		if inp.Type == "" {
 			inp.Type = "ยาสามัญ"
