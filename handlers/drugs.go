@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -386,14 +389,16 @@ func (h *DrugHandler) LowStock(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	// Match report.go Summary semantics: low-stock = nearly out (stock in 1..min_stock).
+	// Match report.go Summary semantics: low-stock = nearly out (stock > 0 and <= threshold).
+	// Threshold = min_stock if > 0, else DEFAULT_LOW_STOCK_THRESHOLD (20).
 	// Drugs with stock == 0 are surfaced separately as "out of stock".
 	cur, err := mdb.Drugs().Find(ctx,
 		bson.M{"$expr": bson.M{
 			"$and": bson.A{
-				bson.M{"$gt": bson.A{"$min_stock", 0}},
 				bson.M{"$gt": bson.A{"$stock", 0}},
-				bson.M{"$lte": bson.A{"$stock", "$min_stock"}},
+				bson.M{"$lte": bson.A{"$stock", bson.M{"$cond": bson.A{
+					bson.M{"$gt": bson.A{"$min_stock", 0}}, "$min_stock", 20,
+				}}}},
 			},
 		}},
 		options.Find().SetSort(bson.D{{Key: "stock", Value: 1}}),
@@ -413,4 +418,116 @@ func (h *DrugHandler) LowStock(w http.ResponseWriter, r *http.Request) {
 		drugs = []models.Drug{}
 	}
 	jsonOK(w, drugs)
+}
+
+// ReorderSuggestions computes per-drug reorder advice from recent sales history.
+// Query params:
+//   - days       (default 30)   lookback window for averaging sales
+//   - lookahead  (default 14)   target cover days (suggest qty = avg_daily * lookahead - stock)
+//
+// GET /api/drugs/reorder-suggestions
+func (h *DrugHandler) ReorderSuggestions(w http.ResponseWriter, r *http.Request) {
+	days := 30
+	if v, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil && v > 0 && v <= 365 {
+		days = v
+	}
+	lookahead := 14
+	if v, err := strconv.Atoi(r.URL.Query().Get("lookahead")); err == nil && v > 0 && v <= 180 {
+		lookahead = v
+	}
+
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	from := time.Now().AddDate(0, 0, -days)
+	totals, err := netTotalsByDrug(ctx, mdb, from, time.Time{})
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	cur, err := mdb.Drugs().Find(ctx, bson.M{})
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer cur.Close(ctx)
+	var drugs []models.Drug
+	if err := cur.All(ctx, &drugs); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	const defaultThreshold = 20
+	const noSalesDaysLeft = 9999.0 // sentinel for "no sales / infinite cover"
+
+	out := make([]models.ReorderSuggestion, 0, len(drugs))
+	for _, d := range drugs {
+		qtySold := 0
+		if t := totals[d.ID]; t != nil && t.Qty > 0 {
+			qtySold = t.Qty
+		}
+		avgDaily := float64(qtySold) / float64(days)
+
+		threshold := d.MinStock
+		if threshold <= 0 {
+			threshold = defaultThreshold
+		}
+
+		daysLeft := noSalesDaysLeft
+		if avgDaily > 0 {
+			daysLeft = float64(d.Stock) / avgDaily
+		}
+
+		suggested := int(math.Ceil(avgDaily*float64(lookahead))) - d.Stock
+		if suggested < 0 {
+			suggested = 0
+		}
+
+		// Include a drug in the suggestion list when any of:
+		//  - out of stock AND had recent sales
+		//  - stock at/below threshold (regardless of sales)
+		//  - cover days (stock / avg_daily) is less than half the lookahead
+		include := false
+		switch {
+		case d.Stock == 0 && qtySold > 0:
+			include = true
+		case d.Stock <= threshold:
+			include = true
+		case daysLeft < float64(lookahead)/2:
+			include = true
+		}
+		if !include {
+			continue
+		}
+
+		out = append(out, models.ReorderSuggestion{
+			DrugID:       d.ID.Hex(),
+			DrugName:     d.Name,
+			Unit:         d.Unit,
+			CurrentStock: d.Stock,
+			MinStock:     d.MinStock,
+			QtySold:      qtySold,
+			AvgDailySale: avgDaily,
+			DaysLeft:     daysLeft,
+			SuggestedQty: suggested,
+			CostPrice:    d.CostPrice,
+			SellPrice:    d.SellPrice,
+		})
+	}
+
+	// Sort: urgency first (stock=0 with sales → smallest days_left → min_stock breaches last)
+	sort.SliceStable(out, func(i, j int) bool {
+		if (out[i].CurrentStock == 0) != (out[j].CurrentStock == 0) {
+			return out[i].CurrentStock == 0
+		}
+		return out[i].DaysLeft < out[j].DaysLeft
+	})
+
+	jsonOK(w, out)
 }

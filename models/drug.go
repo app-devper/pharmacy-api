@@ -41,6 +41,22 @@ type DrugInput struct {
 	CreateLot   *DrugLotInput `json:"create_lot,omitempty"`
 }
 
+// ReorderSuggestion is returned by GET /api/drugs/reorder-suggestions.
+// DaysLeft uses sentinel 9999 when AvgDailySale == 0 (never sells / no data).
+type ReorderSuggestion struct {
+	DrugID       string  `json:"drug_id"`
+	DrugName     string  `json:"drug_name"`
+	Unit         string  `json:"unit"`
+	CurrentStock int     `json:"current_stock"`
+	MinStock     int     `json:"min_stock"`
+	QtySold      int     `json:"qty_sold"`       // total sold over period
+	AvgDailySale float64 `json:"avg_daily_sale"`
+	DaysLeft     float64 `json:"days_left"`      // 9999 = no sales / infinite
+	SuggestedQty int     `json:"suggested_qty"`
+	CostPrice    float64 `json:"cost_price"`
+	SellPrice    float64 `json:"sell_price"`
+}
+
 type DrugUpdate struct {
 	Name        string   `json:"name"`
 	GenericName string   `json:"generic_name"`

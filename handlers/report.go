@@ -74,11 +74,14 @@ func (h *ReportHandler) Summary(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// low-stock = 1 <= stock <= threshold,
+	// where threshold = min_stock (when > 0) else DEFAULT_LOW_STOCK_THRESHOLD (20).
 	lowStock := int(countDrugs(ctx, mdb, bson.M{
 		"$expr": bson.M{"$and": bson.A{
-			bson.M{"$gt": bson.A{"$min_stock", 0}},
 			bson.M{"$gt": bson.A{"$stock", 0}},
-			bson.M{"$lte": bson.A{"$stock", "$min_stock"}},
+			bson.M{"$lte": bson.A{"$stock", bson.M{"$cond": bson.A{
+				bson.M{"$gt": bson.A{"$min_stock", 0}}, "$min_stock", 20,
+			}}}},
 		}},
 	}))
 	outStock := int(countDrugs(ctx, mdb, bson.M{"stock": 0}))
