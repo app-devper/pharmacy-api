@@ -38,6 +38,14 @@ type MonthlyData struct {
 	Profit  float64 `bson:"profit"  json:"profit"`
 }
 
+// Dashboard aggregates everything ReportPage needs on initial load into one response.
+type Dashboard struct {
+	Summary     ReportSummary `json:"summary"`
+	Daily       []DailyData   `json:"daily"`
+	Monthly     []MonthlyData `json:"monthly"`
+	RecentSales []Sale        `json:"recent_sales"`
+}
+
 // EodReport — End-of-Day cash reconciliation summary
 type EodReport struct {
 	Date          string  `json:"date"`           // YYYY-MM-DD

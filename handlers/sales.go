@@ -218,7 +218,29 @@ func (h *SaleHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jsonOK(w, models.SaleResponse{BillNo: billNo, Discount: discount, Total: total, Change: change})
+	// Collect fresh stock values for each drug we just sold so the client can patch
+	// local state without hitting GET /api/drugs again. One query per unique drug.
+	updates := make([]models.StockUpdate, 0, len(preparedItems))
+	seen := make(map[bson.ObjectID]struct{}, len(preparedItems))
+	for _, it := range preparedItems {
+		if _, ok := seen[it.DrugID]; ok {
+			continue
+		}
+		seen[it.DrugID] = struct{}{}
+		var d struct {
+			Stock int `bson:"stock"`
+		}
+		if err := mdb.Drugs().FindOne(ctx, bson.M{"_id": it.DrugID},
+			options.FindOne().SetProjection(bson.M{"stock": 1}),
+		).Decode(&d); err == nil {
+			updates = append(updates, models.StockUpdate{DrugID: it.DrugID, NewStock: d.Stock})
+		}
+	}
+
+	jsonOK(w, models.SaleResponse{
+		BillNo: billNo, Discount: discount, Total: total, Change: change,
+		StockUpdates: updates,
+	})
 }
 
 func (h *SaleHandler) prepareSaleItems(ctx context.Context, mdb *db.MongoDB, inputs []models.SaleItemInput) ([]preparedSaleItem, float64, error) {

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -423,6 +424,154 @@ func (h *ReportHandler) Monthly(w http.ResponseWriter, r *http.Request) {
 		result = append(result, *row)
 	}
 	jsonOK(w, result)
+}
+
+// Dashboard bundles summary + daily + monthly + recent_sales into a single response
+// so ReportPage only makes one HTTP call on initial load.
+// GET /api/report/dashboard?days=7
+func (h *ReportHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
+	days := 7
+	if d, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil && d > 0 && d <= 365 {
+		days = d
+	}
+
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+
+	now := time.Now()
+	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	endOfDay := startOfDay.Add(24 * time.Hour)
+	startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	sinceDaily := startOfDay.AddDate(0, 0, -days)
+	sinceMonthly := now.AddDate(0, -12, 0)
+
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		summary models.ReportSummary
+		daily   []models.DailyData
+		monthly []models.MonthlyData
+		recent  []models.Sale
+		firstErr error
+	)
+	setErr := func(e error) {
+		mu.Lock()
+		if firstErr == nil && e != nil {
+			firstErr = e
+		}
+		mu.Unlock()
+	}
+
+	// (1) Summary
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		todaySales, err := netSalesAmount(ctx, mdb, startOfDay, endOfDay)
+		if err != nil { setErr(err); return }
+		monthSales, err := netSalesAmount(ctx, mdb, startOfMonth, endOfDay)
+		if err != nil { setErr(err); return }
+		todayBills := countDocs(ctx, mdb, bson.M{"sold_at": bson.M{"$gte": startOfDay, "$lt": endOfDay}})
+		stockValue, err := calcStockValue(ctx, mdb)
+		if err != nil { setErr(err); return }
+		lowStock := int(countDrugs(ctx, mdb, bson.M{
+			"$expr": bson.M{"$and": bson.A{
+				bson.M{"$gt": bson.A{"$stock", 0}},
+				bson.M{"$lte": bson.A{"$stock", bson.M{"$cond": bson.A{
+					bson.M{"$gt": bson.A{"$min_stock", 0}}, "$min_stock", 20,
+				}}}},
+			}},
+		}))
+		outStock := int(countDrugs(ctx, mdb, bson.M{"stock": 0}))
+		summary = models.ReportSummary{
+			TodaySales: todaySales, TodayBills: int(todayBills), MonthSales: monthSales,
+			StockValue: stockValue, LowStock: lowStock, OutStock: outStock,
+		}
+	}()
+
+	// (2) Daily (last N days)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		saleItems, err := loadSaleItemRows(ctx, mdb, sinceDaily, time.Time{})
+		if err != nil { setErr(err); return }
+		returnItems, err := loadReturnItemRows(ctx, mdb, sinceDaily, time.Time{})
+		if err != nil { setErr(err); return }
+		dayTotals := map[string]float64{}
+		for _, it := range saleItems { dayTotals[it.At.Format("2006-01-02")] += it.Subtotal }
+		for _, it := range returnItems { dayTotals[it.At.Format("2006-01-02")] -= it.Subtotal }
+		keys := make([]string, 0, len(dayTotals))
+		for k := range dayTotals { keys = append(keys, k) }
+		sort.Strings(keys)
+		daily = make([]models.DailyData, 0, len(keys))
+		for _, k := range keys {
+			daily = append(daily, models.DailyData{Day: k, Total: dayTotals[k]})
+		}
+	}()
+
+	// (3) Monthly (last 12 months)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		saleItems, err := loadSaleItemRows(ctx, mdb, sinceMonthly, time.Time{})
+		if err != nil { setErr(err); return }
+		returnItems, err := loadReturnItemRows(ctx, mdb, sinceMonthly, time.Time{})
+		if err != nil { setErr(err); return }
+		monthsMap := map[string]*models.MonthlyData{}
+		for _, it := range saleItems {
+			k := it.At.Format("2006-01")
+			if monthsMap[k] == nil { monthsMap[k] = &models.MonthlyData{Month: k} }
+			monthsMap[k].Revenue += it.Subtotal
+			monthsMap[k].Cost += it.CostSubtotal
+		}
+		for _, it := range returnItems {
+			k := it.At.Format("2006-01")
+			if monthsMap[k] == nil { monthsMap[k] = &models.MonthlyData{Month: k} }
+			monthsMap[k].Revenue -= it.Subtotal
+			monthsMap[k].Cost -= it.CostSubtotal
+		}
+		keys := make([]string, 0, len(monthsMap))
+		for k := range monthsMap { keys = append(keys, k) }
+		sort.Strings(keys)
+		monthly = make([]models.MonthlyData, 0, len(keys))
+		for _, k := range keys {
+			row := monthsMap[k]
+			row.Profit = row.Revenue - row.Cost
+			monthly = append(monthly, *row)
+		}
+	}()
+
+	// (4) Recent 5 sales
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		cur, err := mdb.Sales().Find(ctx, bson.M{},
+			options.Find().SetSort(bson.D{{Key: "sold_at", Value: -1}}).SetLimit(5),
+		)
+		if err != nil { setErr(err); return }
+		defer cur.Close(ctx)
+		var sales []models.Sale
+		if err := cur.All(ctx, &sales); err != nil { setErr(err); return }
+		if sales == nil { sales = []models.Sale{} }
+		recent = sales
+	}()
+
+	wg.Wait()
+	if firstErr != nil {
+		jsonError(w, firstErr.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	jsonOK(w, models.Dashboard{
+		Summary:     summary,
+		Daily:       daily,
+		Monthly:     monthly,
+		RecentSales: recent,
+	})
 }
 
 func notVoided(filter bson.M) bson.M {

@@ -140,7 +140,16 @@ func (h *DrugHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	cur, err := mdb.Drugs().Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
+	findOpts := options.Find().SetSort(bson.D{{Key: "name", Value: 1}})
+	// ?fields=compact → return only fields needed by SellPage/DrugGrid to cut payload ~60%.
+	// Omit this param (or use any other value) to get the full Drug document.
+	if r.URL.Query().Get("fields") == "compact" {
+		findOpts.SetProjection(bson.M{
+			"_id": 1, "name": 1, "price": 1, "cost_price": 1,
+			"stock": 1, "barcode": 1, "reg_no": 1, "unit": 1, "report_types": 1,
+		})
+	}
+	cur, err := mdb.Drugs().Find(ctx, bson.M{}, findOpts)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return

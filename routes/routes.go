@@ -60,6 +60,7 @@ func Setup(
 
 			// Reports (dashboard only)
 			r.Get("/report/summary", rh.Summary)
+			r.Get("/report/dashboard", rh.Dashboard)
 			r.Get("/report/daily", rh.Daily)
 			r.Get("/report/monthly", rh.Monthly)
 			r.Get("/report/top-drugs", rh.TopDrugs)

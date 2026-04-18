@@ -49,9 +49,18 @@ type SaleInput struct {
 	Received   float64         `json:"received"`
 }
 
+// StockUpdate is an optimistic-update hint for the client: after a sale succeeds,
+// these are the new drug.stock values so the client can patch local state instead
+// of re-fetching the entire drug list.
+type StockUpdate struct {
+	DrugID   bson.ObjectID `json:"drug_id"`
+	NewStock int           `json:"new_stock"`
+}
+
 type SaleResponse struct {
-	BillNo   string  `json:"bill_no"`
-	Discount float64 `json:"discount"`
-	Total    float64 `json:"total"`
-	Change   float64 `json:"change"`
+	BillNo       string        `json:"bill_no"`
+	Discount     float64       `json:"discount"`
+	Total        float64       `json:"total"`
+	Change       float64       `json:"change"`
+	StockUpdates []StockUpdate `json:"stock_updates,omitempty"`
 }
