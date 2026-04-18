@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -93,7 +94,7 @@ func (h *DrugLotHandler) AddLot(w http.ResponseWriter, r *http.Request) {
 
 	importDate := time.Now()
 	if input.ImportDate != "" {
-		if parsed, err := time.Parse("2006-01-02", input.ImportDate); err == nil {
+		if parsed, err := time.ParseInLocation("2006-01-02", input.ImportDate, time.Local); err == nil {
 			importDate = parsed
 		}
 	}
@@ -125,19 +126,19 @@ func (h *DrugLotHandler) AddLot(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:  time.Now(),
 	}
 
-	res, err := mdb.DrugLots().InsertOne(ctx, lot)
-	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	lot.ID = res.InsertedID.(bson.ObjectID)
+	if err := mdb.WithTransaction(ctx, func(txCtx context.Context) error {
+		res, err := mdb.DrugLots().InsertOne(txCtx, lot)
+		if err != nil {
+			return err
+		}
+		lot.ID = res.InsertedID.(bson.ObjectID)
 
-	// Atomically increment drug.stock by lot quantity
-	_, err = mdb.Drugs().UpdateOne(ctx,
-		bson.M{"_id": drugOID},
-		bson.M{"$inc": bson.M{"stock": input.Quantity}},
-	)
-	if err != nil {
+		_, err = mdb.Drugs().UpdateOne(txCtx,
+			bson.M{"_id": drugOID},
+			bson.M{"$inc": bson.M{"stock": input.Quantity}},
+		)
+		return err
+	}); err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -264,30 +265,42 @@ func (h *DrugLotHandler) WriteoffLots(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		var lot models.DrugLot
-		if err := mdb.DrugLots().FindOneAndDelete(ctx, bson.M{"_id": lotOID}).Decode(&lot); err != nil {
-			continue // not found or already deleted — skip
-		}
+		if err := mdb.WithTransaction(ctx, func(txCtx context.Context) error {
+			var lot models.DrugLot
+			if err := mdb.DrugLots().FindOne(txCtx, bson.M{"_id": lotOID}).Decode(&lot); err != nil {
+				return err // not found — skip via outer continue
+			}
 
-		if lot.Remaining > 0 {
-			mdb.Drugs().UpdateOne(ctx,
-				bson.M{"_id": lot.DrugID},
-				bson.M{"$inc": bson.M{"stock": -lot.Remaining}},
-			)
-		}
+			res, err := mdb.DrugLots().DeleteOne(txCtx, bson.M{"_id": lotOID})
+			if err != nil {
+				return err
+			}
+			if res.DeletedCount == 0 {
+				return fmt.Errorf("lot already removed")
+			}
 
-		// Audit log — lookup drug name then record the write-off
-		var drug models.Drug
-		mdb.Drugs().FindOne(ctx, bson.M{"_id": lot.DrugID}).Decode(&drug)
-		mdb.LotWriteoffs().InsertOne(ctx, models.LotWriteoff{
-			ID:         bson.NewObjectID(),
-			DrugID:     lot.DrugID,
-			DrugName:   drug.Name,
-			LotNumber:  lot.LotNumber,
-			ExpiryDate: lot.ExpiryDate,
-			Qty:        lot.Remaining,
-			CreatedAt:  time.Now(),
-		})
+			if lot.Remaining > 0 {
+				if _, err := mdb.Drugs().UpdateOne(txCtx,
+					bson.M{"_id": lot.DrugID},
+					bson.M{"$inc": bson.M{"stock": -lot.Remaining}},
+				); err != nil {
+					return err
+				}
+			}
+
+			_, err = mdb.LotWriteoffs().InsertOne(txCtx, models.LotWriteoff{
+				ID:         bson.NewObjectID(),
+				DrugID:     lot.DrugID,
+				DrugName:   lot.DrugName,
+				LotNumber:  lot.LotNumber,
+				ExpiryDate: lot.ExpiryDate,
+				Qty:        lot.Remaining,
+				CreatedAt:  time.Now(),
+			})
+			return err
+		}); err != nil {
+			continue
+		}
 
 		writtenOff++
 	}
@@ -327,19 +340,27 @@ func (h *DrugLotHandler) DeleteLot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Delete the lot
-	_, err = mdb.DrugLots().DeleteOne(ctx, bson.M{"_id": lotOID})
-	if err != nil {
+	// Delete lot + decrement stock atomically
+	if err := mdb.WithTransaction(ctx, func(txCtx context.Context) error {
+		res, err := mdb.DrugLots().DeleteOne(txCtx, bson.M{"_id": lotOID})
+		if err != nil {
+			return err
+		}
+		if res.DeletedCount == 0 {
+			return fmt.Errorf("lot not found or already deleted")
+		}
+		if lot.Remaining > 0 {
+			if _, err := mdb.Drugs().UpdateOne(txCtx,
+				bson.M{"_id": drugOID},
+				bson.M{"$inc": bson.M{"stock": -lot.Remaining}},
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
-	}
-
-	// Decrement drug.stock by the remaining qty (not original quantity)
-	if lot.Remaining > 0 {
-		mdb.Drugs().UpdateOne(ctx,
-			bson.M{"_id": drugOID},
-			bson.M{"$inc": bson.M{"stock": -lot.Remaining}},
-		)
 	}
 
 	jsonOK(w, map[string]bool{"ok": true})

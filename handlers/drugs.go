@@ -72,6 +72,10 @@ func (h *DrugHandler) Add(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "name is required", http.StatusBadRequest)
 		return
 	}
+	if len(input.Name) > 255 {
+		jsonError(w, "name too long (max 255)", http.StatusBadRequest)
+		return
+	}
 	if input.Type == "" {
 		input.Type = "ยาสามัญ"
 	}
@@ -130,6 +134,10 @@ func (h *DrugHandler) Update(w http.ResponseWriter, r *http.Request) {
 	var input models.DrugUpdate
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		jsonError(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	if len(input.Name) > 255 {
+		jsonError(w, "name too long (max 255)", http.StatusBadRequest)
 		return
 	}
 	if input.ReportTypes == nil {
@@ -211,11 +219,26 @@ func (h *DrugHandler) BulkImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	bulkCtx, bulkCancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer bulkCancel()
+
 	result := BulkImportResult{Errors: []BulkImportRowError{}}
 	for i, inp := range input.Drugs {
 		row := i + 2 // row 1 = header in the Excel sheet
 		if inp.Name == "" {
 			result.Errors = append(result.Errors, BulkImportRowError{Row: row, Name: "-", Message: "ชื่อยาห้ามว่าง"})
+			continue
+		}
+		if inp.SellPrice < 0 {
+			result.Errors = append(result.Errors, BulkImportRowError{Row: row, Name: inp.Name, Message: "ราคาขายต้องไม่ติดลบ"})
+			continue
+		}
+		if inp.CostPrice < 0 {
+			result.Errors = append(result.Errors, BulkImportRowError{Row: row, Name: inp.Name, Message: "ราคาทุนต้องไม่ติดลบ"})
+			continue
+		}
+		if inp.Stock < 0 {
+			result.Errors = append(result.Errors, BulkImportRowError{Row: row, Name: inp.Name, Message: "สต็อกต้องไม่ติดลบ"})
 			continue
 		}
 		if inp.Type == "" {
@@ -244,7 +267,7 @@ func (h *DrugHandler) BulkImport(w http.ResponseWriter, r *http.Request) {
 			ReportTypes: inp.ReportTypes,
 			CreatedAt:   time.Now(),
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(bulkCtx, 5*time.Second)
 		_, err := mdb.Drugs().InsertOne(ctx, drug)
 		cancel()
 		if err != nil {

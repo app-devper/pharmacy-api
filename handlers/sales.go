@@ -551,9 +551,10 @@ func (h *SaleHandler) Void(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SaleHandler) restoreSaleItemLots(ctx context.Context, mdb *db.MongoDB, item models.SaleItem) error {
+	// Restore to ASC (earliest-expiry first) to mirror FEFO deduction order
 	lotCur, err := mdb.DrugLots().Find(ctx,
 		bson.M{"drug_id": item.DrugID},
-		options.Find().SetSort(bson.D{{Key: "expiry_date", Value: -1}}),
+		options.Find().SetSort(bson.D{{Key: "expiry_date", Value: 1}}),
 	)
 	if err != nil {
 		return err

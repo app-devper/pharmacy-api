@@ -71,7 +71,7 @@ func Setup(
 
 		// ── ADMIN + SUPER only ────────────────────────────────────
 		r.Group(func(r chi.Router) {
-			r.Use(mw.RequireRole(RoleADMIN, RoleSUPER))
+			r.Use(mw.RequireRole(RoleADMIN))
 
 			// Drug management
 			r.Post("/drugs", dh.Add)

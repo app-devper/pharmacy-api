@@ -4,21 +4,26 @@ import (
 	"net/http"
 )
 
-func RequireRole(allowed ...string) func(http.Handler) http.Handler {
+// roleLevel maps role name to numeric level. Higher = more privilege.
+var roleLevel = map[string]int{
+	"USER":  1,
+	"ADMIN": 2,
+	"SUPER": 3,
+}
+
+// RequireRole returns middleware that allows requests where the caller's role
+// is >= minRole in the hierarchy (USER < ADMIN < SUPER).
+func RequireRole(minRole string) func(http.Handler) http.Handler {
+	min := roleLevel[minRole]
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			role := GetRole(r.Context())
-			if role == "" {
-				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			level, ok := roleLevel[role]
+			if !ok || level < min {
+				http.Error(w, `{"error":"insufficient permissions"}`, http.StatusForbidden)
 				return
 			}
-			for _, a := range allowed {
-				if role == a {
-					next.ServeHTTP(w, r)
-					return
-				}
-			}
-			http.Error(w, `{"error":"insufficient permissions"}`, http.StatusForbidden)
+			next.ServeHTTP(w, r)
 		})
 	}
 }

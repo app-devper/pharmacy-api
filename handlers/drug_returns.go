@@ -124,12 +124,11 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 		var counter struct {
 			Seq int `bson:"seq"`
 		}
-		err = mdb.Counters().FindOneAndUpdate(txCtx,
+		if err := mdb.Counters().FindOneAndUpdate(txCtx,
 			bson.M{"_id": counterID},
 			bson.M{"$inc": bson.M{"seq": 1}},
 			options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.After),
-		).Decode(&counter)
-		if err != nil {
+		).Decode(&counter); err != nil {
 			return fmt.Errorf("return number error: %w", err)
 		}
 		returnNo := fmt.Sprintf("RET-%s-%03d", today, counter.Seq)
@@ -258,9 +257,10 @@ func (h *ReturnHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ReturnHandler) restoreReturnItemLots(ctx context.Context, mdb *db.MongoDB, item models.SaleItem, qty int) error {
+	// Restore to ASC (earliest-expiry first) to mirror FEFO deduction order
 	lotCur, err := mdb.DrugLots().Find(ctx,
 		bson.M{"drug_id": item.DrugID},
-		options.Find().SetSort(bson.D{{Key: "expiry_date", Value: -1}}),
+		options.Find().SetSort(bson.D{{Key: "expiry_date", Value: 1}}),
 	)
 	if err != nil {
 		return err

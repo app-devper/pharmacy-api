@@ -170,7 +170,7 @@ func (h *MovementsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 func fetchImports(ctx context.Context, d *db.MongoDB, from, to time.Time, drugName string) []MovementEntry {
 	filter := bson.M{
-		"created_at": bson.M{"$gte": from, "$lt": to},
+		"import_date": bson.M{"$gte": from, "$lt": to},
 	}
 	if drugName != "" {
 		filter["drug_name"] = bson.M{"$regex": regexp.QuoteMeta(drugName), "$options": "i"}
@@ -182,12 +182,12 @@ func fetchImports(ctx context.Context, d *db.MongoDB, from, to time.Time, drugNa
 	defer cur.Close(ctx)
 
 	var results []struct {
-		ID        bson.ObjectID `bson:"_id"`
-		DrugID    bson.ObjectID `bson:"drug_id"`
-		DrugName  string        `bson:"drug_name"`
-		LotNumber string        `bson:"lot_number"`
-		Quantity  int           `bson:"quantity"`
-		CreatedAt time.Time     `bson:"created_at"`
+		ID         bson.ObjectID `bson:"_id"`
+		DrugID     bson.ObjectID `bson:"drug_id"`
+		DrugName   string        `bson:"drug_name"`
+		LotNumber  string        `bson:"lot_number"`
+		Quantity   int           `bson:"quantity"`
+		ImportDate time.Time     `bson:"import_date"`
 	}
 	cur.All(ctx, &results)
 
@@ -200,7 +200,7 @@ func fetchImports(ctx context.Context, d *db.MongoDB, from, to time.Time, drugNa
 			DrugName:  r.DrugName,
 			Delta:     r.Quantity,
 			Reference: r.LotNumber,
-			At:        r.CreatedAt,
+			At:        r.ImportDate,
 		})
 	}
 	return entries

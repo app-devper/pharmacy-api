@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -22,7 +23,7 @@ func kyFilter(month string) bson.M {
 	if month == "" {
 		return bson.M{}
 	}
-	return bson.M{"date": bson.M{"$regex": "^" + month}}
+	return bson.M{"date": bson.M{"$regex": "^" + regexp.QuoteMeta(month)}}
 }
 
 func (h *KyHandler) ListKy9(w http.ResponseWriter, r *http.Request) {

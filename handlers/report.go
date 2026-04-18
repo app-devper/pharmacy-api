@@ -62,7 +62,13 @@ func (h *ReportHandler) Summary(w http.ResponseWriter, r *http.Request) {
 	monthSales := netSalesAmount(ctx, mdb, startOfMonth, endOfDay)
 	todayBills := countDocs(ctx, mdb, bson.M{"sold_at": bson.M{"$gte": startOfDay, "$lt": endOfDay}})
 	stockValue := calcStockValue(ctx, mdb)
-	lowStock := int(countDrugs(ctx, mdb, bson.M{"stock": bson.M{"$gt": 0, "$lte": 20}}))
+	lowStock := int(countDrugs(ctx, mdb, bson.M{
+		"$expr": bson.M{"$and": bson.A{
+			bson.M{"$gt": bson.A{"$min_stock", 0}},
+			bson.M{"$gt": bson.A{"$stock", 0}},
+			bson.M{"$lte": bson.A{"$stock", "$min_stock"}},
+		}},
+	}))
 	outStock := int(countDrugs(ctx, mdb, bson.M{"stock": 0}))
 
 	jsonOK(w, models.ReportSummary{
@@ -89,7 +95,8 @@ func (h *ReportHandler) Daily(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	since := time.Now().AddDate(0, 0, -days)
+	sinceRaw := time.Now().AddDate(0, 0, -days)
+	since := time.Date(sinceRaw.Year(), sinceRaw.Month(), sinceRaw.Day(), 0, 0, 0, 0, sinceRaw.Location())
 	saleItems, err := loadSaleItemRows(ctx, mdb, since, time.Time{})
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)

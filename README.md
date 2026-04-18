@@ -35,6 +35,7 @@ backend/
 │   ├── suppliers.go
 │   ├── stock_adjustments.go
 │   ├── drug_returns.go
+│   ├── movements.go
 │   ├── report.go
 │   ├── kyforms.go
 │   ├── export.go
@@ -110,6 +111,10 @@ Authorization: Bearer <token>
 | `GET` | `/api/drugs/low-stock` | ยาที่สต็อกต่ำ |
 | `POST` | `/api/drugs` | เพิ่มยาใหม่ |
 | `PUT` | `/api/drugs/:id` | แก้ไขข้อมูลยา |
+| `POST` | `/api/drugs/bulk` | นำเข้ายาจาก Excel สูงสุด 1,000 รายการ |
+
+**Bulk Import** — Request: `{ "drugs": [DrugInput, ...] }` · Response: `{ "imported": N, "errors": [{ "row": N, "name": "...", "message": "..." }] }`
+ข้อผิดพลาดต่อแถวไม่หยุด batch — รายการที่สำเร็จถูก insert ต่อไป
 
 ### Stock Adjustments
 
@@ -181,7 +186,7 @@ Authorization: Bearer <token>
 | `GET` | `/api/report/slow-drugs` | ยาขายช้า |
 | `GET` | `/api/report/monthly` | สรุปรายเดือน |
 
-### KY Forms & PDF Export
+### KY Forms
 
 | Method | Path | คำอธิบาย |
 |--------|------|-----------|
@@ -190,6 +195,55 @@ Authorization: Bearer <token>
 | `GET/POST` | `/api/ky11` | แบบ ขย.11 |
 | `GET/POST` | `/api/ky12` | แบบ ขย.12 |
 | `GET` | `/api/export/:form` | Export PDF (ky9, ky10, ky11, ky12) |
+
+---
+
+## Multi-Tenant Architecture
+
+แต่ละ `clientId` (จาก JWT claim) มี MongoDB database แยกกัน:
+
+| clientId | Database |
+|----------|----------|
+| `"000"` | `pharmacy` (default) |
+| `"abc"` | `pharmacy_abc` |
+
+`Manager.ForClient(clientId)` ทำ lazy init ด้วย `sync.Map` + `sync.Once`:
+- **ครั้งแรก**: สร้าง `*MongoDB` → รัน `CreateIndexes` ใน background goroutine
+- **ครั้งต่อไป**: คืน cached instance ทันที (lock-free)
+- **clientId validation**: ต้องตรง `^[a-zA-Z0-9_-]+$` — มิฉะนั้น return `403 Forbidden`
+- **Poison eviction**: ถ้า init ล้มเหลว จะลบ entry ออกจาก cache เพื่อให้ retry ได้
+
+Bootstrap (main.go): `000` ถูก warm-up โดย `CreateIndexesForClient("000")` ตอนเริ่มต้น
+
+---
+
+## RBAC (Role-Based Access Control)
+
+| Role | สิทธิ์ |
+|------|--------|
+| `SUPER` | ทุกอย่าง |
+| `ADMIN` | จัดการยา, ขาย, รายงาน, นำเข้า, ซัพพลายเออร์, แบบฟอร์ม ขย. |
+| `USER` | ขาย, ดูประวัติ, ดูสต็อก, จัดการลูกค้า (read + add) |
+
+### Endpoints ที่ต้องการ ADMIN หรือ SUPER
+
+- `POST /api/drugs`, `PUT /api/drugs/:id`, `POST /api/drugs/bulk`
+- `POST /api/drugs/:id/adjustments`, `POST /api/drugs/:id/lots`, `DELETE /api/drugs/:id/lots/:lot_id`, `POST /api/lots/writeoff`
+- `PUT /api/customers/:id`
+- `POST /api/sales/:id/void`
+- `GET /api/report/eod`, `GET /api/report/profit`
+- `GET|POST /api/ky9`, `GET|POST /api/ky10`, `GET|POST /api/ky11`, `GET|POST /api/ky12`
+- `/api/imports/*` ทั้งหมด
+- `/api/suppliers/*` ทั้งหมด
+- `GET /api/export/:form`
+
+### Endpoints ที่ USER เข้าถึงได้
+
+`GET /api/drugs`, `GET /api/drugs/low-stock`, `GET /api/drugs/:id/lots`, `GET /api/lots/expiring`,
+`GET|POST /api/customers`, `GET /api/customers/:id/sales`,
+`GET|POST /api/sales`, `GET /api/sales/:id/items`, `POST /api/sales/:id/return`, `GET /api/sales/:id/returns`,
+`GET /api/report/summary`, `GET /api/report/daily`, `GET /api/report/monthly`, `GET /api/report/top-drugs`, `GET /api/report/slow-drugs`,
+`GET /api/movements`
 
 ---
 
@@ -204,7 +258,7 @@ type Drug struct {
     GenericName string         // ชื่อสามัญ
     Type        string         // ประเภทยา
     Strength    string         // ขนาดยา เช่น "500mg"
-    Barcode     string         // บาร์โค้ด
+    Barcode     string         // บาร์โค้ด (sparse unique index — ว่างได้; scanner fallback ใช้ RegNo)
     SellPrice   float64        // ราคาขาย (bson:"price" สำหรับ backward compat)
     CostPrice   float64        // ราคาทุน
     Stock       int            // จำนวนคงเหลือรวม

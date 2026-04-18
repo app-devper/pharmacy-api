@@ -251,6 +251,11 @@ func (m *MongoDB) CreateIndexes(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
+	if _, err := m.DrugLots().Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "import_date", Value: 1}},
+	}); err != nil {
+		return err
+	}
 	// Indexes on purchase_orders
 	if _, err := m.PurchaseOrders().Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "created_at", Value: -1}},

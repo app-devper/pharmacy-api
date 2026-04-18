@@ -424,6 +424,9 @@ func (h *ImportHandler) buildItems(ctx context.Context, mdb *db.MongoDB, inputs 
 		if inp.CostPrice < 0 {
 			return nil, 0, fmt.Errorf("cost_price must be >= 0")
 		}
+		if inp.SellPrice != nil && *inp.SellPrice < 0 {
+			return nil, 0, fmt.Errorf("sell_price must be >= 0")
+		}
 
 		oid, err := bson.ObjectIDFromHex(inp.DrugID)
 		if err != nil {
