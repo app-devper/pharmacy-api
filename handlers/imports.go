@@ -319,8 +319,12 @@ func (h *ImportHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 				Remaining:  item.Qty,
 				CreatedAt:  now,
 			}
-			if _, err := mdb.DrugLots().InsertOne(txCtx, lot); err != nil {
+			lotRes, err := mdb.DrugLots().InsertOne(txCtx, lot)
+			if err != nil {
 				return fmt.Errorf("lot insert failed for %s: %w", item.DrugName, err)
+			}
+			if oid, ok := lotRes.InsertedID.(bson.ObjectID); ok {
+				lot.ID = oid
 			}
 
 			stockRes, err := mdb.Drugs().UpdateOne(txCtx,
@@ -332,6 +336,16 @@ func (h *ImportHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 			}
 			if stockRes.MatchedCount == 0 {
 				return fmt.Errorf("drug not found for %s", item.DrugName)
+			}
+
+			// Oversell reconciliation — absorb any pending "sell now, reconcile
+			// later" debts against this new lot. Walks prior SaleItems with
+			// oversold_qty > 0 in sale order and backfills their LotSplits.
+			// drug.stock is intentionally NOT touched: the oversold sale
+			// already decremented it; the +qty above brings the books to the
+			// correct net position.
+			if err := reconcileOversold(txCtx, mdb, item.DrugID, lot); err != nil {
+				return fmt.Errorf("oversold reconcile failed for %s: %w", item.DrugName, err)
 			}
 
 			var drug models.Drug

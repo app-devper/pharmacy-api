@@ -70,6 +70,12 @@ type SaleItem struct {
 	// True when a LotSnapshot was provided AND the FEFO engine deducted from
 	// a different lot than the snapshot's. Used for compliance reconciliation.
 	LotMismatch  bool           `bson:"lot_mismatch,omitempty"  json:"lot_mismatch,omitempty"`
+	// Base units sold without lot coverage — the cashier explicitly confirmed
+	// "sell now, reconcile later" (AllowOversell). Decremented when a future
+	// Import absorbs against it; reaches 0 once the oversold portion has a
+	// lot in LotSplits. When this item is voided, these units return to
+	// drug.stock (no lot to restore).
+	OversoldQty int `bson:"oversold_qty,omitempty" json:"oversold_qty,omitempty"`
 }
 
 type SaleItemInput struct {
@@ -82,6 +88,11 @@ type SaleItemInput struct {
 	UnitFactor    int          `json:"unit_factor"`  // 0 or 1 = base
 	PriceTier     string       `json:"price_tier"`   // "" | retail | regular | wholesale
 	LotSnapshot   *LotSnapshot `json:"lot_snapshot,omitempty"` // optional FEFO hint
+	// AllowOversell opts this line into "sell now, stock later" — the sale
+	// succeeds even if drug.stock < qty. The shortfall is recorded as
+	// SaleItem.OversoldQty and will be auto-reconciled against the next
+	// import lot (FIFO by sale order). Cashier must confirm per bill.
+	AllowOversell bool `json:"allow_oversell,omitempty"`
 }
 
 type SaleInput struct {

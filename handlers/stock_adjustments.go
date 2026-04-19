@@ -75,12 +75,35 @@ func (h *StockAdjustmentHandler) Create(w http.ResponseWriter, r *http.Request) 
 			return err
 		}
 
+		stockBefore := updated.Stock - input.Delta
+		stockAfter := updated.Stock
+
+		// Oversell reconciliation: a positive adjustment may be the admin
+		// correcting a short count on a drug that's been oversold. Apply
+		// FIFO against pending oversold SaleItems — the first `drained` units
+		// of the adjustment settle past debts, and the remainder stays in
+		// drug.stock as newly available inventory. drug.stock is NOT further
+		// offset: the $inc already put delta in, and since oversold is a
+		// liability tracked separately from lots, reducing it doesn't require
+		// removing units from stock (the negative stock value drug carried
+		// simply moves closer to zero / positive as oversold_qty drops).
+		//
+		// Example: stock=-7, oversold=7, admin +10 →
+		//   after $inc stock=+3, drain=min(10,7)=7, oversold=0, stock stays +3.
+		// Example: stock=-7, oversold=7, admin +3 →
+		//   after $inc stock=-4, drain=min(3,7)=3, oversold=4, stock stays -4.
+		if input.Delta > 0 {
+			if _, err := reconcileOversoldFromAdjustment(txCtx, mdb, oid, input.Delta, input.Reason); err != nil {
+				return err
+			}
+		}
+
 		adj := models.StockAdjustment{
 			DrugID:    oid,
 			DrugName:  updated.Name,
 			Delta:     input.Delta,
-			Before:    updated.Stock - input.Delta,
-			After:     updated.Stock,
+			Before:    stockBefore,
+			After:     stockAfter,
 			Reason:    input.Reason,
 			Note:      input.Note,
 			CreatedAt: time.Now(),

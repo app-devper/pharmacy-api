@@ -141,6 +141,23 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 			if inp.Qty+currentReturned[inp.SaleItemID] > si.Qty {
 				return fmt.Errorf("คืนเกินจำนวนที่ขาย: %s (ขายไป %d, คืนแล้ว %d)", si.DrugName, si.Qty, currentReturned[inp.SaleItemID])
 			}
+			// Only units backed by a real lot can be returned — the unreconciled
+			// oversold portion has no lot to give back to, and the synthetic
+			// (adjustment-reconciled) portion was absorbed from bulk stock
+			// rather than a specific lot. Cap returnable at the sum of real
+			// LotSplits (non-zero LotID).
+			realLotQty := 0
+			for _, sp := range si.LotSplits {
+				if !sp.LotID.IsZero() {
+					realLotQty += sp.Qty
+				}
+			}
+			if realLotQty < si.Qty {
+				if inp.Qty+currentReturned[inp.SaleItemID] > realLotQty {
+					pending := si.Qty - realLotQty
+					return fmt.Errorf("ยา %s: คืนได้สูงสุด %d (มี %d หน่วยยังไม่ผูกกับล็อตจริง)", si.DrugName, realLotQty, pending)
+				}
+			}
 		}
 
 		now := time.Now()
