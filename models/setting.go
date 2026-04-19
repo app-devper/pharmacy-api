@@ -17,7 +17,11 @@ type Settings struct {
 	Stock      StockSettings      `bson:"stock"         json:"stock"`
 	Pharmacist PharmacistInfo     `bson:"pharmacist"    json:"pharmacist"`
 	KY         KYSettings         `bson:"ky"            json:"ky"`
-	UpdatedAt  time.Time          `bson:"updated_at"    json:"updated_at"`
+	// Timezone — IANA name (e.g. "Asia/Bangkok"). Controls how "today" /
+	// "this month" are computed for reports and day-bucketed filters. Empty →
+	// falls back to DefaultTimezone.
+	Timezone  string    `bson:"timezone,omitempty" json:"timezone"`
+	UpdatedAt time.Time `bson:"updated_at"         json:"updated_at"`
 }
 
 type StoreInfo struct {
@@ -65,6 +69,7 @@ const (
 	DefaultReorderDays       = 30
 	DefaultReorderLookahead  = 14
 	DefaultExpiringDays      = 60
+	DefaultTimezone          = "Asia/Bangkok"
 )
 
 // DefaultSettings returns the values used when no document exists yet.
@@ -97,6 +102,7 @@ func DefaultSettings() Settings {
 			SkipAuto:            false,
 			DefaultBuyerAddress: "",
 		},
+		Timezone: DefaultTimezone,
 	}
 }
 
@@ -107,4 +113,5 @@ type SettingsInput struct {
 	Stock      StockSettings   `json:"stock"`
 	Pharmacist PharmacistInfo  `json:"pharmacist"`
 	KY         KYSettings      `json:"ky"`
+	Timezone   string          `json:"timezone"`
 }

@@ -52,6 +52,15 @@ func (h *SaleHandler) List(w http.ResponseWriter, r *http.Request) {
 		limit = l
 	}
 
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	tz := loadTimezone(ctx, mdb)
+
 	filter := bson.M{}
 
 	// Date range filter
@@ -60,12 +69,12 @@ func (h *SaleHandler) List(w http.ResponseWriter, r *http.Request) {
 	if fromStr != "" || toStr != "" {
 		dateFilter := bson.M{}
 		if fromStr != "" {
-			if t, err := time.ParseInLocation("2006-01-02", fromStr, time.Local); err == nil {
+			if t, err := time.ParseInLocation("2006-01-02", fromStr, tz); err == nil {
 				dateFilter["$gte"] = t
 			}
 		}
 		if toStr != "" {
-			if t, err := time.ParseInLocation("2006-01-02", toStr, time.Local); err == nil {
+			if t, err := time.ParseInLocation("2006-01-02", toStr, tz); err == nil {
 				dateFilter["$lt"] = t.Add(24 * time.Hour)
 			}
 		}
@@ -80,14 +89,6 @@ func (h *SaleHandler) List(w http.ResponseWriter, r *http.Request) {
 			bson.M{"customer_name": bson.M{"$regex": escapedSearch, "$options": "i"}},
 		}
 	}
-
-	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
-	if err != nil {
-		jsonError(w, "unauthorized client", http.StatusForbidden)
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
 
 	cur, err := mdb.Sales().Find(ctx, filter,
 		options.Find().SetSort(bson.D{{Key: "sold_at", Value: -1}}).SetLimit(limit),

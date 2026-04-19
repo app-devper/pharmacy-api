@@ -110,6 +110,17 @@ func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Timezone — blank falls back to default. Reject unknown IANA names so the
+	// stored value is always usable by loadTimezone() without silent drift.
+	input.Timezone = strings.TrimSpace(input.Timezone)
+	if input.Timezone == "" {
+		input.Timezone = models.DefaultTimezone
+	}
+	if _, err := time.LoadLocation(input.Timezone); err != nil {
+		jsonError(w, "timezone ไม่ถูกต้อง (ต้องเป็น IANA เช่น Asia/Bangkok)", http.StatusBadRequest)
+		return
+	}
+
 	// Stock defaults — clamp to sane ranges.
 	// low_stock_threshold = 0 is allowed (means "never flag low-stock unless
 	// the individual drug.min_stock is set"). Only negative is rejected.
@@ -153,6 +164,7 @@ func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 			"stock":      input.Stock,
 			"pharmacist": input.Pharmacist,
 			"ky":         input.KY,
+			"timezone":   input.Timezone,
 			"updated_at": now,
 		},
 	}
@@ -172,6 +184,7 @@ func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Stock:      input.Stock,
 		Pharmacist: input.Pharmacist,
 		KY:         input.KY,
+		Timezone:   input.Timezone,
 		UpdatedAt:  now,
 	})
 }

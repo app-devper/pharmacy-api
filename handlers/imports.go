@@ -110,6 +110,7 @@ func (h *ImportHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
+	tz := loadTimezone(ctx, mdb)
 
 	// Generate atomic doc_no: IMP-YYMMDD-NNN
 	now := time.Now()
@@ -131,7 +132,7 @@ func (h *ImportHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	receiveDate := now
 	if input.ReceiveDate != "" {
-		parsed, err := time.ParseInLocation("2006-01-02", input.ReceiveDate, time.Local)
+		parsed, err := time.ParseInLocation("2006-01-02", input.ReceiveDate, tz)
 		if err != nil {
 			jsonError(w, "receive_date must be YYYY-MM-DD", http.StatusBadRequest)
 			return
@@ -201,9 +202,10 @@ func (h *ImportHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	tz := loadTimezone(ctx, mdb)
 	receiveDate := existing.ReceiveDate
 	if input.ReceiveDate != "" {
-		parsed, err := time.ParseInLocation("2006-01-02", input.ReceiveDate, time.Local)
+		parsed, err := time.ParseInLocation("2006-01-02", input.ReceiveDate, tz)
 		if err != nil {
 			jsonError(w, "receive_date must be YYYY-MM-DD", http.StatusBadRequest)
 			return
@@ -263,6 +265,7 @@ func (h *ImportHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
+	tz := loadTimezone(ctx, mdb)
 
 	var po models.PurchaseOrder
 	if err := mdb.PurchaseOrders().FindOne(ctx, bson.M{"_id": oid}).Decode(&po); err != nil {
@@ -288,7 +291,7 @@ func (h *ImportHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, fmt.Sprintf("รายการที่ %d: จำนวนต้องมากกว่า 0", i+1), http.StatusBadRequest)
 			return
 		}
-		if _, err := time.ParseInLocation("2006-01-02", item.ExpiryDate, time.Local); err != nil {
+		if _, err := time.ParseInLocation("2006-01-02", item.ExpiryDate, tz); err != nil {
 			jsonError(w, fmt.Sprintf("รายการที่ %d: วันหมดอายุไม่ถูกต้อง", i+1), http.StatusBadRequest)
 			return
 		}
@@ -301,7 +304,7 @@ func (h *ImportHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 		attemptLogs := make([]importLogEntry, 0, len(po.Items))
 
 		for _, item := range po.Items {
-			expiry, _ := time.ParseInLocation("2006-01-02", item.ExpiryDate, time.Local)
+			expiry, _ := time.ParseInLocation("2006-01-02", item.ExpiryDate, tz)
 			costPrice := item.CostPrice
 
 			lot := models.DrugLot{

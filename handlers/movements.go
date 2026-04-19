@@ -43,18 +43,19 @@ func (h *MovementsHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
+	tz := loadTimezone(r.Context(), d)
 
 	// --- date range ---
 	now := time.Now()
 	from := now.AddDate(0, 0, -30)
 	to := now.Add(24 * time.Hour)
 	if s := q.Get("from"); s != "" {
-		if t, err := time.ParseInLocation("2006-01-02", s, time.Local); err == nil {
+		if t, err := time.ParseInLocation("2006-01-02", s, tz); err == nil {
 			from = t
 		}
 	}
 	if s := q.Get("to"); s != "" {
-		if t, err := time.ParseInLocation("2006-01-02", s, time.Local); err == nil {
+		if t, err := time.ParseInLocation("2006-01-02", s, tz); err == nil {
 			to = t.Add(24 * time.Hour)
 		}
 	}

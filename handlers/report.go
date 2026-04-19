@@ -54,10 +54,11 @@ func (h *ReportHandler) Summary(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	now := time.Now()
-	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	tz := loadTimezone(ctx, mdb)
+	now := time.Now().In(tz)
+	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, tz)
 	endOfDay := startOfDay.Add(24 * time.Hour)
-	startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, tz)
 
 	todaySales, err := netSalesAmount(ctx, mdb, startOfDay, endOfDay)
 	if err != nil {
@@ -147,23 +148,6 @@ func (h *ReportHandler) Daily(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ReportHandler) Eod(w http.ResponseWriter, r *http.Request) {
-	dateStr := r.URL.Query().Get("date")
-
-	var startOfDay time.Time
-	if dateStr != "" {
-		t, err := time.ParseInLocation("2006-01-02", dateStr, time.Local)
-		if err != nil {
-			jsonError(w, "date must be YYYY-MM-DD", http.StatusBadRequest)
-			return
-		}
-		startOfDay = t
-	} else {
-		now := time.Now()
-		startOfDay = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-		dateStr = startOfDay.Format("2006-01-02")
-	}
-	endOfDay := startOfDay.Add(24 * time.Hour)
-
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
 		jsonError(w, "unauthorized client", http.StatusForbidden)
@@ -171,6 +155,23 @@ func (h *ReportHandler) Eod(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
+	tz := loadTimezone(ctx, mdb)
+
+	dateStr := r.URL.Query().Get("date")
+	var startOfDay time.Time
+	if dateStr != "" {
+		t, err := time.ParseInLocation("2006-01-02", dateStr, tz)
+		if err != nil {
+			jsonError(w, "date must be YYYY-MM-DD", http.StatusBadRequest)
+			return
+		}
+		startOfDay = t
+	} else {
+		now := time.Now().In(tz)
+		startOfDay = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, tz)
+		dateStr = startOfDay.Format("2006-01-02")
+	}
+	endOfDay := startOfDay.Add(24 * time.Hour)
 
 	filter := notVoided(bson.M{"sold_at": bson.M{"$gte": startOfDay, "$lt": endOfDay}})
 	cur, err := mdb.Sales().Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "sold_at", Value: 1}}))
@@ -216,8 +217,6 @@ func (h *ReportHandler) Eod(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ReportHandler) Profit(w http.ResponseWriter, r *http.Request) {
-	from, to := resolveReportRange(r)
-
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
 		jsonError(w, "unauthorized client", http.StatusForbidden)
@@ -225,6 +224,7 @@ func (h *ReportHandler) Profit(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
+	from, to := resolveReportRange(r, loadTimezone(ctx, mdb))
 
 	totals, err := netTotalsByDrug(ctx, mdb, from, to)
 	if err != nil {
@@ -444,10 +444,11 @@ func (h *ReportHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 
-	now := time.Now()
-	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	tz := loadTimezone(ctx, mdb)
+	now := time.Now().In(tz)
+	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, tz)
 	endOfDay := startOfDay.Add(24 * time.Hour)
-	startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, tz)
 	sinceDaily := startOfDay.AddDate(0, 0, -days)
 	sinceMonthly := now.AddDate(0, -12, 0)
 
@@ -584,19 +585,19 @@ func notVoided(filter bson.M) bson.M {
 	return merged
 }
 
-func resolveReportRange(r *http.Request) (time.Time, time.Time) {
-	now := time.Now()
-	from := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-	to := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 999999999, now.Location())
+func resolveReportRange(r *http.Request, tz *time.Location) (time.Time, time.Time) {
+	now := time.Now().In(tz)
+	from := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, tz)
+	to := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 999999999, tz)
 
 	if s := r.URL.Query().Get("from"); s != "" {
-		if t, err := time.ParseInLocation("2006-01-02", s, time.Local); err == nil {
+		if t, err := time.ParseInLocation("2006-01-02", s, tz); err == nil {
 			from = t
 		}
 	}
 	if s := r.URL.Query().Get("to"); s != "" {
-		if t, err := time.ParseInLocation("2006-01-02", s, time.Local); err == nil {
-			to = time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, time.Local)
+		if t, err := time.ParseInLocation("2006-01-02", s, tz); err == nil {
+			to = time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, tz)
 		}
 	}
 	return from, to
