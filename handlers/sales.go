@@ -41,6 +41,9 @@ type preparedSaleItem struct {
 	Unit          string // alt-unit display name ("" = base)
 	UnitFactor    int    // 1 = base unit; >=2 = alt
 	PriceTier     string // "" | retail | regular | wholesale
+	// Forwarded from SaleItemInput — lets applySaleItem compare the client's
+	// expected lot against the actual FEFO deduction.
+	LotSnapshot   *models.LotSnapshot
 }
 
 func (h *SaleHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -345,6 +348,7 @@ func (h *SaleHandler) prepareSaleItems(ctx context.Context, mdb *db.MongoDB, inp
 			Unit:          unit,
 			UnitFactor:    factor,
 			PriceTier:     tier,
+			LotSnapshot:   input.LotSnapshot,
 		})
 	}
 
@@ -467,6 +471,9 @@ func (h *SaleHandler) applySaleItem(ctx context.Context, mdb *db.MongoDB, saleID
 			Unit:          item.Unit,
 			UnitFactor:    item.UnitFactor,
 			PriceTier:     item.PriceTier,
+			LotSnapshot:   item.LotSnapshot,
+			// LotSplits stays empty; no lots to record. LotMismatch also false
+			// (nothing to compare against).
 		}
 		if _, err := mdb.SaleItems().InsertOne(ctx, si); err != nil {
 			return err
@@ -476,6 +483,7 @@ func (h *SaleHandler) applySaleItem(ctx context.Context, mdb *db.MongoDB, saleID
 
 	need := item.Qty
 	costSubtotal := 0.0
+	splits := make([]models.LotDeduction, 0, 2)
 	for _, lot := range lots {
 		if need <= 0 {
 			break
@@ -501,9 +509,25 @@ func (h *SaleHandler) applySaleItem(ctx context.Context, mdb *db.MongoDB, saleID
 		}
 		costSubtotal += float64(deduct) * lotCost
 		need -= deduct
+		splits = append(splits, models.LotDeduction{
+			LotID:      lot.ID,
+			LotNumber:  lot.LotNumber,
+			ExpiryDate: lot.ExpiryDate,
+			Qty:        deduct,
+		})
 	}
 	if len(lots) > 0 && need > 0 {
 		return fmt.Errorf("insufficient lot inventory for %s", item.Drug.Name)
+	}
+
+	// Compliance reconciliation: flag when the client's expected lot (captured
+	// at cart checkout) differs from the first lot FEFO actually pulled from.
+	// This happens most commonly when an offline-queued sale syncs after
+	// another terminal has shifted the FEFO queue. The sale still succeeds —
+	// pharmacists just get a hint that the paper audit trail may need review.
+	lotMismatch := false
+	if item.LotSnapshot != nil && len(splits) > 0 {
+		lotMismatch = splits[0].LotID != item.LotSnapshot.LotID
 	}
 
 	si := models.SaleItem{
@@ -519,6 +543,9 @@ func (h *SaleHandler) applySaleItem(ctx context.Context, mdb *db.MongoDB, saleID
 		Unit:          item.Unit,
 		UnitFactor:    item.UnitFactor,
 		PriceTier:     item.PriceTier,
+		LotSplits:     splits,
+		LotSnapshot:   item.LotSnapshot,
+		LotMismatch:   lotMismatch,
 	}
 	if _, err := mdb.SaleItems().InsertOne(ctx, si); err != nil {
 		return err

@@ -282,7 +282,58 @@ func (h *DrugHandler) List(w http.ResponseWriter, r *http.Request) {
 	if drugs == nil {
 		drugs = []models.Drug{}
 	}
+	// Attach next-FEFO lot summary per drug so the client can surface
+	// "next expiry" in the UI and snapshot the expected lot at checkout.
+	attachNextLots(ctx, mdb, drugs)
 	jsonOK(w, drugs)
+}
+
+// attachNextLots decorates `drugs` in place with NextLot — the earliest-
+// expiring lot with remaining > 0 for each drug. Errors are swallowed
+// (falls back to no decoration) because a missing lot summary should never
+// block the drug list from returning. One aggregation on drug_lots, O(N)
+// in lots — not per-drug lookups.
+func attachNextLots(ctx context.Context, mdb *db.MongoDB, drugs []models.Drug) {
+	if len(drugs) == 0 {
+		return
+	}
+	pipe := bson.A{
+		bson.M{"$match": bson.M{"remaining": bson.M{"$gt": 0}}},
+		bson.M{"$sort": bson.D{{Key: "drug_id", Value: 1}, {Key: "expiry_date", Value: 1}}},
+		bson.M{"$group": bson.M{
+			"_id":         "$drug_id",
+			"lot_id":      bson.M{"$first": "$_id"},
+			"lot_number":  bson.M{"$first": "$lot_number"},
+			"expiry_date": bson.M{"$first": "$expiry_date"},
+		}},
+	}
+	cur, err := mdb.DrugLots().Aggregate(ctx, pipe)
+	if err != nil {
+		return
+	}
+	defer cur.Close(ctx)
+	var rows []struct {
+		DrugID     bson.ObjectID `bson:"_id"`
+		LotID      bson.ObjectID `bson:"lot_id"`
+		LotNumber  string        `bson:"lot_number"`
+		ExpiryDate time.Time     `bson:"expiry_date"`
+	}
+	if err := cur.All(ctx, &rows); err != nil {
+		return
+	}
+	byDrug := make(map[bson.ObjectID]*models.LotSummary, len(rows))
+	for _, r := range rows {
+		byDrug[r.DrugID] = &models.LotSummary{
+			LotID:      r.LotID,
+			LotNumber:  r.LotNumber,
+			ExpiryDate: r.ExpiryDate,
+		}
+	}
+	for i := range drugs {
+		if lot, ok := byDrug[drugs[i].ID]; ok {
+			drugs[i].NextLot = lot
+		}
+	}
 }
 
 func (h *DrugHandler) Add(w http.ResponseWriter, r *http.Request) {

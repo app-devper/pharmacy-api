@@ -38,6 +38,17 @@ type AltUnit struct {
 	Hidden    bool       `bson:"hidden,omitempty"  json:"hidden"`
 }
 
+// LotSummary is a lightweight pointer to the lot that FEFO will deduct from
+// next — earliest-expiring lot with remaining > 0. Attached to Drug on list
+// responses so clients can (a) show "next expiry" in the UI and (b) snapshot
+// which lot they expected at checkout time for offline-queued sales.
+// Not persisted on the Drug document itself; populated at read time.
+type LotSummary struct {
+	LotID      bson.ObjectID `bson:"lot_id"      json:"lot_id"`
+	LotNumber  string        `bson:"lot_number"  json:"lot_number"`
+	ExpiryDate time.Time     `bson:"expiry_date" json:"expiry_date"`
+}
+
 type Drug struct {
 	ID          bson.ObjectID `bson:"_id,omitempty"  json:"id"`
 	Name        string        `bson:"name"           json:"name"`
@@ -56,7 +67,10 @@ type Drug struct {
 	ReportTypes []string   `bson:"report_types"   json:"report_types"`
 	AltUnits    []AltUnit  `bson:"alt_units,omitempty" json:"alt_units"`
 	Prices      PriceTiers `bson:"prices,omitempty"    json:"prices"`
-	CreatedAt   time.Time  `bson:"created_at"     json:"created_at"`
+	// Next-FEFO lot — populated on list responses only, not stored. May be
+	// nil when the drug has no lots (e.g. stock-only legacy data).
+	NextLot     *LotSummary `bson:"-" json:"next_lot,omitempty"`
+	CreatedAt   time.Time   `bson:"created_at"     json:"created_at"`
 }
 
 type DrugInput struct {
