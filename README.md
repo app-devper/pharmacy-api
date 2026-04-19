@@ -206,6 +206,21 @@ Authorization: Bearer <token>
 | `GET/POST` | `/api/ky12` | แบบ ขย.12 |
 | `GET` | `/api/export/:form` | Export PDF (ky9, ky10, ky11, ky12) |
 
+### Settings (Singleton per tenant)
+
+| Method | Path | คำอธิบาย |
+|--------|------|-----------|
+| `GET` | `/api/settings` | ดึงการตั้งค่าร้าน · สร้าง default ถ้ายังไม่มี |
+| `PUT` | `/api/settings` | บันทึกการตั้งค่า (ADMIN/SUPER) |
+
+รวม: ข้อมูลร้าน, ใบเสร็จ (header/footer/paper_width), Stock thresholds, เภสัชกร, ขย.toggle, และ **timezone** (IANA name) — ใช้คำนวณ "วันนี้"/"เดือนนี้" ในรายงานและ date-range filter ทั่วทั้งระบบ
+
+### Movements
+
+| Method | Path | คำอธิบาย |
+|--------|------|-----------|
+| `GET` | `/api/movements` | ประวัติการเคลื่อนไหวสต็อก (นำเข้า/ขาย/คืน/ปรับ/ตัดจำหน่าย/ยกเลิก) — กรองวันที่, ประเภท, ชื่อยา |
+
 ---
 
 ## Multi-Tenant Architecture
@@ -268,19 +283,42 @@ type Drug struct {
     GenericName string         // ชื่อสามัญ
     Type        string         // ประเภทยา
     Strength    string         // ขนาดยา เช่น "500mg"
-    Barcode     string         // บาร์โค้ด (partial unique index — ว่างได้; scanner fallback ใช้ RegNo)
-    SellPrice   float64        // ราคาขาย (bson:"price" สำหรับ backward compat)
+    Barcode     string         // บาร์โค้ดหน่วยหลัก (partial unique — ว่างได้; scanner fallback ใช้ RegNo)
+    SellPrice   float64        // ราคาขายเริ่มต้น (bson:"price" backward-compat; = Prices.retail)
     CostPrice   float64        // ราคาทุน
-    Stock       int            // จำนวนคงเหลือรวม (= Σ DrugLot.Remaining เมื่อใช้ lot)
-    MinStock    int            // จุดสั่งซื้อขั้นต่ำ (0 = ใช้ default 20 สำหรับ low-stock alert)
+    Stock       int            // คงเหลือรวมในหน่วยหลัก (= Σ DrugLot.Remaining)
+    MinStock    int            // จุดสั่งซื้อขั้นต่ำ (0 = ใช้ Settings.stock.low_stock_threshold)
     RegNo       string         // เลขทะเบียนยา
-    Unit        string         // หน่วย เช่น "เม็ด", "แคปซูล"
+    Unit        string         // หน่วยหลัก เช่น "เม็ด", "แคปซูล"
     ReportTypes []string       // ["ky9", "ky10", "ky11", "ky12"]
+    AltUnits    []AltUnit      // หน่วยทางเลือก (แผง, กล่อง, …) — ดูด้านล่าง
+    Prices      PriceTiers     // map[tier]price (retail/regular/wholesale/custom)
     CreatedAt   time.Time      // วันที่สร้าง
 }
 ```
 
 **การสร้างยา** — `POST /api/drugs` เข้มงวด: ถ้า `stock > 0` ต้องมี `create_lot` ไปด้วยเสมอ → backend ทำ transaction สร้าง Drug + DrugLot พร้อมกัน จึงการันตีว่า `drug.stock` มาพร้อม lot จริงเสมอ (FEFO ทำงานถูก) · `POST /api/drugs/bulk` ผ่อนคลายกฎนี้ — ยอม import ยาที่มี stock ค้างไว้ก่อน แล้วไปเพิ่ม lot ภายหลัง
+
+### Multi-unit & Multi-tier Pricing
+
+```go
+type PriceTiers map[string]float64   // "retail" | "regular" | "wholesale" | custom
+
+type AltUnit struct {
+    Name      string      // "แผง", "กล่อง"
+    Factor    int         // ≥ 2 — 1 alt = N base (1 แผง = 10 เม็ด)
+    SellPrice float64     // back-compat mirror ของ Prices["retail"]
+    Prices    PriceTiers  // ราคาต่อ alt unit (tier map)
+    Barcode   string      // optional — สแกนแล้วเลือกหน่วยนี้อัตโนมัติ
+    Hidden    bool        // true = ไม่โชว์ในตัวเลือกตอนขาย (ข้อมูลเก่าคงไว้)
+}
+```
+
+- **Base unit first**: Stock, lots, reports ทั้งหมดเก็บและคำนวณในหน่วยหลักเสมอ · alt_units เป็น UI/pricing convenience ที่คูณ qty × factor ก่อนตัดสต็อก
+- **Tier fallback**: `resolveTierPrice(tier)` → `tier → retail → SellPrice` เพื่อรองรับเอกสารรุ่นเก่า
+- **Legacy compat**: schema เก่าที่เก็บ `Prices` เป็น struct `{retail, regular, wholesale}` decode เข้า map ได้โดยไม่ต้อง migrate
+- **Scanner precedence**: `alt_unit.barcode` (non-hidden) → `drug.barcode` → `reg_no`
+- **Customer-linked tier**: `Customer.PriceTier` ถ้าไม่ว่างจะ auto-apply ทั้งตะกร้าเมื่อเลือกลูกค้า
 
 ### Drug Lot (FEFO)
 
@@ -326,12 +364,15 @@ type SaleItem struct {
     SaleID        bson.ObjectID  // อ้างอิงบิล
     DrugID        bson.ObjectID  // อ้างอิงยา
     DrugName      string         // ชื่อยา
-    Qty           int            // จำนวน
-    Price         float64        // ราคาต่อหน่วยหลังหักส่วนลดแล้ว
+    Qty           int            // จำนวนในหน่วยที่ขาย (Unit)
+    Price         float64        // ราคาต่อหน่วยหลังหักส่วนลดแล้ว (ในหน่วยที่ขาย)
     OriginalPrice float64        // ราคาขายเดิม (ก่อนลด)
     ItemDiscount  float64        // ส่วนลดต่อหน่วย
     Subtotal      float64        // รวม (Price × Qty)
     CostSubtotal  float64        // ต้นทุนรวม
+    Unit          string         // "" = หน่วยหลัก · ชื่อ alt unit ถ้าขายเป็นแผง/กล่อง
+    UnitFactor    int            // 1 = base, ≥2 = alt (ใช้คูณตัดสต็อก)
+    PriceTier     string         // tier ที่ใช้ขาย (retail/regular/wholesale/custom)
 }
 ```
 
@@ -344,7 +385,8 @@ type Customer struct {
     ID         bson.ObjectID  // id
     Name       string         // ชื่อ
     Phone      string         // เบอร์โทร (partial unique index — ว่างได้, ซ้ำไม่ได้)
-    Disease    string         // โรคประจำตัว
+    Disease    string         // โรคประจำตัว / แพ้ยา
+    PriceTier  string         // "" = หน้าร้าน · "regular"/"wholesale"/custom — auto-apply ตอนเลือก
     TotalSpent float64        // ยอดซื้อสะสม
     LastVisit  *time.Time     // เข้าร้านล่าสุด
     CreatedAt  time.Time      // วันที่สร้าง
@@ -495,6 +537,22 @@ type Dashboard struct {
     RecentSales []Sale          // 5 บิลล่าสุด
 }
 
+type Settings struct {
+    // Singleton (key="singleton") — one document per tenant. Auto-created with
+    // defaults on first GET.
+    Store      StoreInfo        // name, address, phone, tax_id
+    Receipt    ReceiptSettings  // header, footer, paper_width ("58"|"80"), show_pharmacist
+    Stock      StockSettings    // low_stock_threshold, reorder_days, reorder_lookahead, expiring_days
+    Pharmacist PharmacistInfo   // name, license_no — ใช้ใน Receipt footer + ขย.11 auto-fill
+    KY         KYSettings       // skip_auto, default_buyer_address
+    Timezone   string           // IANA ("Asia/Bangkok") — reports + day filters
+    UpdatedAt  time.Time
+}
+```
+
+**Timezone usage** — handler ที่แปลง `YYYY-MM-DD` ↔ `time.Time` (report, sales, movements, imports) ทุกตัวเรียก `loadTimezone(ctx, mdb)` → ใช้ค่านี้ parse/format · fallback เป็น `Asia/Bangkok` เมื่อไม่ได้ตั้งหรือ IANA name ผิด
+
+```go
 type ReorderSuggestion struct {
     DrugID       string   // hex id
     DrugName     string
