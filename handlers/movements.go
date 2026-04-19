@@ -46,7 +46,9 @@ func (h *MovementsHandler) List(w http.ResponseWriter, r *http.Request) {
 	tz := loadTimezone(r.Context(), d)
 
 	// --- date range ---
-	now := time.Now()
+	// Default window (last 30 days → tomorrow) anchored on Bangkok-local "now"
+	// so early-morning requests don't trim yesterday from the view.
+	now := time.Now().In(tz)
 	from := now.AddDate(0, 0, -30)
 	to := now.Add(24 * time.Hour)
 	if s := q.Get("from"); s != "" {

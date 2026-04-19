@@ -112,9 +112,9 @@ func (h *ImportHandler) Create(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	tz := loadTimezone(ctx, mdb)
 
-	// Generate atomic doc_no: IMP-YYMMDD-NNN
+	// Generate atomic doc_no: IMP-YYMMDD-NNN (keyed by local calendar day).
 	now := time.Now()
-	today := now.Format("060102")
+	today := now.In(tz).Format("060102")
 	counterID := "IMP-" + today
 	var counter struct {
 		Seq int `bson:"seq"`

@@ -165,9 +165,12 @@ func (h *SaleHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	change := math.Max(0, received-total)
 
+	// Bill number is keyed by calendar day in the pharmacy's timezone so same-day
+	// sales share one counter and the YYMMDD prefix matches the local date.
+	tz := loadTimezone(ctx, mdb)
 	var billNo string
 	if err := mdb.WithTransaction(ctx, func(txCtx context.Context) error {
-		now := time.Now()
+		now := time.Now().In(tz)
 		generatedBillNo, err := h.nextSaleBillNo(txCtx, mdb, now)
 		if err != nil {
 			return err

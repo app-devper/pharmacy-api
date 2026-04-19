@@ -53,6 +53,7 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
+	tz := loadTimezone(ctx, mdb)
 
 	var sale models.Sale
 	if err := mdb.Sales().FindOne(ctx, bson.M{"_id": oid}).Decode(&sale); err != nil {
@@ -143,7 +144,9 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 
 		now := time.Now()
-		today := now.Format("060102")
+		// Counter keyed by local calendar day so same-day returns share one seq
+		// and the RET-YYMMDD prefix matches the pharmacy's local date.
+		today := now.In(tz).Format("060102")
 		counterID := "RET-" + today
 		var counter struct {
 			Seq int `bson:"seq"`
