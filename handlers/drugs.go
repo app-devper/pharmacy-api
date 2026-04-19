@@ -74,51 +74,72 @@ func validateAltUnits(alts []models.AltUnit, baseUnit string) ([]models.AltUnit,
 		}
 		a.Prices = tiers
 		// Keep SellPrice in sync with Retail so legacy code keeps working.
-		a.SellPrice = tiers.Retail
+		a.SellPrice = tiers[models.TierRetail]
 		out = append(out, a)
 	}
 	return out, nil
 }
 
-// validatePriceTiers rejects negatives and fills Retail with the fallback
-// (typically the drug's SellPrice) when the caller left it at 0.
+// validatePriceTiers normalises the dynamic tier map:
+// - rejects negatives
+// - drops entries whose value is 0 (except retail)
+// - ensures retail has a value, falling back to `retailFallback` (typically SellPrice)
+// - trims tier keys
 func validatePriceTiers(p models.PriceTiers, retailFallback float64) (models.PriceTiers, error) {
-	if p.Retail < 0 || p.Regular < 0 || p.Wholesale < 0 {
-		return models.PriceTiers{}, fmt.Errorf("ราคาทุก tier ต้อง >= 0")
+	out := models.PriceTiers{}
+	for k, v := range p {
+		k = strings.TrimSpace(k)
+		if k == "" {
+			continue
+		}
+		if v < 0 {
+			return nil, fmt.Errorf("ราคา tier %q ต้อง >= 0", k)
+		}
+		// Retail is always kept (even if 0 — gets overwritten by fallback below).
+		// Other tiers with 0 are treated as "not set" and dropped.
+		if v == 0 && k != models.TierRetail {
+			continue
+		}
+		out[k] = v
 	}
-	if p.Retail == 0 {
-		p.Retail = retailFallback
+	if out[models.TierRetail] == 0 && retailFallback > 0 {
+		out[models.TierRetail] = retailFallback
 	}
-	return p, nil
+	return out, nil
 }
 
 // resolveTierPrice picks the effective per-unit price given the customer's tier.
-// A tier price of 0 means "not set" and transparently falls back to Retail,
-// which itself falls back to SellPrice via validatePriceTiers above.
+// A missing tier falls back to retail, which itself falls back to `base`
+// (typically the drug's legacy SellPrice).
 func resolveTierPrice(base float64, p models.PriceTiers, tier string) float64 {
-	switch tier {
-	case "regular":
-		if p.Regular > 0 {
-			return p.Regular
-		}
-	case "wholesale":
-		if p.Wholesale > 0 {
-			return p.Wholesale
+	if tier != "" && tier != models.TierRetail {
+		if v, ok := p[tier]; ok && v > 0 {
+			return v
 		}
 	}
-	if p.Retail > 0 {
-		return p.Retail
+	if v, ok := p[models.TierRetail]; ok && v > 0 {
+		return v
 	}
 	return base
 }
 
-// isValidPriceTier returns true when the string is one of the allowed values.
+// isValidPriceTier accepts any string (dynamic tiers), rejecting only control
+// characters. "" is allowed and means "retail" implicitly.
 func isValidPriceTier(t string) bool {
-	switch t {
-	case "", "retail", "regular", "wholesale":
+	t = strings.TrimSpace(t)
+	if t == "" {
 		return true
 	}
-	return false
+	// Guard against accidental control chars / overly long names.
+	if len(t) > 32 {
+		return false
+	}
+	for _, r := range t {
+		if r < 32 {
+			return false
+		}
+	}
+	return true
 }
 
 func buildDrugCreatePayload(input models.DrugInput, now time.Time) (models.Drug, *models.DrugLot, error) {
@@ -150,7 +171,7 @@ func buildDrugCreatePayload(input models.DrugInput, now time.Time) (models.Drug,
 		return models.Drug{}, nil, err
 	}
 	// Keep SellPrice in sync with Retail so legacy readers see the expected value.
-	input.SellPrice = priceTiers.Retail
+	input.SellPrice = priceTiers[models.TierRetail]
 
 	// Reject negative stock outright.
 	if input.Stock < 0 {
@@ -353,7 +374,7 @@ func (h *DrugHandler) Update(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	input.SellPrice = priceTiers.Retail
+	input.SellPrice = priceTiers[models.TierRetail]
 
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {

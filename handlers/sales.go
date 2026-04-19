@@ -314,7 +314,10 @@ func (h *SaleHandler) prepareSaleItems(ctx context.Context, mdb *db.MongoDB, inp
 		var authoritativeOriginal float64
 		if matchedAlt != nil {
 			perAlt := resolveTierPrice(matchedAlt.SellPrice, matchedAlt.Prices, tier)
-			authoritativeOriginal = perAlt / float64(factor) // convert to per-base unit
+			// Round to 2 decimal places so fractional division (e.g. ฿100/3)
+			// doesn't leave long-tail floats on the SaleItem that later break
+			// reprint / receipt math.
+			authoritativeOriginal = math.Round(perAlt/float64(factor)*100) / 100
 		} else {
 			authoritativeOriginal = resolveTierPrice(drug.SellPrice, drug.Prices, tier)
 		}

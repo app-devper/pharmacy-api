@@ -6,14 +6,21 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// PriceTiers holds the 3 selling tiers. Retail is the default; Regular and
-// Wholesale are optional — a value of 0 means "not set" and falls back to
-// Retail via resolvePrice() in handlers/sales.go.
-type PriceTiers struct {
-	Retail    float64 `bson:"retail"    json:"retail"`
-	Regular   float64 `bson:"regular"   json:"regular"`
-	Wholesale float64 `bson:"wholesale" json:"wholesale"`
-}
+// PriceTiers is a dynamic tier→price map. Keys are tier identifiers
+// ("retail", "regular", "wholesale", or any custom tier like "vip" / "staff").
+// `retail` is the conventional default tier; a missing tier falls back to
+// `retail`, then to the legacy `SellPrice` — see resolveTierPrice().
+//
+// Legacy documents that stored the old struct shape
+// `{ retail, regular, wholesale }` decode into this map transparently.
+type PriceTiers map[string]float64
+
+// Well-known tier identifiers. Any other string is also accepted.
+const (
+	TierRetail    = "retail"
+	TierRegular   = "regular"
+	TierWholesale = "wholesale"
+)
 
 // AltUnit — alternate selling unit for a drug. Example: base unit "เม็ด",
 // alt unit "แผง" with factor 10 means 1 blister = 10 tablets.
@@ -24,7 +31,11 @@ type AltUnit struct {
 	Factor    int        `bson:"factor"            json:"factor"`     // must be >= 2
 	SellPrice float64    `bson:"sell_price"        json:"sell_price"` // = Prices.Retail (back-compat shim)
 	Prices    PriceTiers `bson:"prices,omitempty"  json:"prices"`
-	Barcode   string     `bson:"barcode,omitempty" json:"barcode"`    // optional
+	Barcode   string     `bson:"barcode,omitempty" json:"barcode"`    // optional; scanner lookup
+	// Hidden hides this alt unit from the sell-page picker. The base unit
+	// is always available — hiding an alt unit only prevents cashiers from
+	// picking it while leaving historical sales intact. Default false = visible.
+	Hidden    bool       `bson:"hidden,omitempty"  json:"hidden"`
 }
 
 type Drug struct {
