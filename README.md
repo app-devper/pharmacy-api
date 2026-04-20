@@ -127,8 +127,10 @@ Authorization: Bearer <token>
 
 | Method | Path | คำอธิบาย |
 |--------|------|-----------|
-| `POST` | `/api/drugs/:id/adjustments` | ปรับสต็อก (audit log) |
+| `POST` | `/api/drugs/:id/adjustments` | ปรับสต็อก (audit log · reconcile oversell เมื่อ +delta) |
 | `GET` | `/api/drugs/:id/adjustments` | ประวัติการปรับสต็อก |
+
+**Oversell reconciliation on adjust** — เมื่อ `delta > 0` และ drug มี `oversold_qty` ค้าง → drain FIFO · append synthetic LotDeduction (`LotNumber: "ADJUST:<reason>"`) เข้า `SaleItem.lot_splits` · `drug.stock` **ไม่ถูก offset เพิ่ม** (delta ที่ adjust เข้ามาคือ net position ที่ admin ต้องการ) · `delta < 0` ยังคง `$gte` guard เดิม → reject ถ้า stock ไม่พอ
 
 ### Drug Lots (FEFO)
 
@@ -145,12 +147,18 @@ Authorization: Bearer <token>
 
 | Method | Path | คำอธิบาย |
 |--------|------|-----------|
-| `POST` | `/api/sales` | บันทึกการขาย (FEFO deduction) |
+| `POST` | `/api/sales` | บันทึกการขาย (FEFO deduction · รองรับ oversell) |
 | `GET` | `/api/sales` | ประวัติการขาย |
-| `GET` | `/api/sales/:id/items` | รายการสินค้าในใบขาย |
+| `GET` | `/api/sales/:id/items` | รายการสินค้าในใบขาย (แสดง lot_splits + oversold_qty) |
 | `POST` | `/api/sales/:id/void` | ยกเลิกใบขาย |
-| `POST` | `/api/sales/:id/return` | คืนสินค้า |
+| `POST` | `/api/sales/:id/return` | คืนสินค้า (เฉพาะส่วนที่ผูก real lot แล้ว) |
 | `GET` | `/api/sales/:id/returns` | ประวัติการคืนสินค้า |
+
+**FEFO + Lot audit trail** — `SaleItem.lot_splits` บันทึกว่า qty ถูกตัดจาก lot ไหนบ้าง (เรียงตาม deduction) · `lot_snapshot` = lot ที่ client คาดการณ์ตอน checkout · `lot_mismatch: true` เมื่อ actual ≠ snapshot (มักเกิดกับ offline-queued sale ที่ sync หลังจาก lot เปลี่ยน)
+
+**Oversell (ขายก่อน-ตัดสต็อกทีหลัง)** — ส่ง `allow_oversell: true` ต่อ SaleItemInput เมื่อ cashier ยืนยันขายเกิน stock · backend drop `$gte` guard สำหรับ line นั้น · qty ที่ไม่มี lot รองรับเก็บเป็น `SaleItem.oversold_qty` · `drug.stock` ติดลบได้ชั่วคราว · reconcile อัตโนมัติเมื่อ:
+- **Import confirm** → `reconcileOversold()` drain FIFO ตาม sold_at ASC · append `LotDeduction` จริงเข้า `lot_splits`
+- **Stock adjustment (+delta)** → `reconcileOversoldFromAdjustment()` · append synthetic `LotDeduction{LotID: zero, LotNumber: "ADJUST:<reason>"}`
 
 ### Customers
 
@@ -293,9 +301,15 @@ type Drug struct {
     ReportTypes []string       // ["ky9", "ky10", "ky11", "ky12"]
     AltUnits    []AltUnit      // หน่วยทางเลือก (แผง, กล่อง, …) — ดูด้านล่าง
     Prices      PriceTiers     // map[tier]price (retail/regular/wholesale/custom)
+    // Computed on list responses only (not persisted): earliest-expiring lot
+    // with remaining > 0. Frontends use this to surface "next expiry" + to
+    // snapshot expected lot at checkout time for offline-queued sales.
+    NextLot     *LotSummary    // {lot_id, lot_number, expiry_date} | nil
     CreatedAt   time.Time      // วันที่สร้าง
 }
 ```
+
+**Negative stock** — `drug.stock` ยอมให้ติดลบได้ จากการ oversell เท่านั้น · Stock adjustment (-) ใช้ `$gte` guard ป้องกันไม่ให้ลบเพิ่ม · Display layer แสดง badge "ค้างส่ง" และ tooltip "รอ reconcile" ใน `StockPage`
 
 **การสร้างยา** — `POST /api/drugs` เข้มงวด: ถ้า `stock > 0` ต้องมี `create_lot` ไปด้วยเสมอ → backend ทำ transaction สร้าง Drug + DrugLot พร้อมกัน จึงการันตีว่า `drug.stock` มาพร้อม lot จริงเสมอ (FEFO ทำงานถูก) · `POST /api/drugs/bulk` ผ่อนคลายกฎนี้ — ยอม import ยาที่มี stock ค้างไว้ก่อน แล้วไปเพิ่ม lot ภายหลัง
 
@@ -364,8 +378,8 @@ type SaleItem struct {
     SaleID        bson.ObjectID  // อ้างอิงบิล
     DrugID        bson.ObjectID  // อ้างอิงยา
     DrugName      string         // ชื่อยา
-    Qty           int            // จำนวนในหน่วยที่ขาย (Unit)
-    Price         float64        // ราคาต่อหน่วยหลังหักส่วนลดแล้ว (ในหน่วยที่ขาย)
+    Qty           int            // จำนวนในหน่วยที่ขาย (Unit) — ในหน่วยหลัก เสมอ
+    Price         float64        // ราคาต่อหน่วย (หน่วยหลัก) หลังหักส่วนลด
     OriginalPrice float64        // ราคาขายเดิม (ก่อนลด)
     ItemDiscount  float64        // ส่วนลดต่อหน่วย
     Subtotal      float64        // รวม (Price × Qty)
@@ -373,8 +387,30 @@ type SaleItem struct {
     Unit          string         // "" = หน่วยหลัก · ชื่อ alt unit ถ้าขายเป็นแผง/กล่อง
     UnitFactor    int            // 1 = base, ≥2 = alt (ใช้คูณตัดสต็อก)
     PriceTier     string         // tier ที่ใช้ขาย (retail/regular/wholesale/custom)
+    // FEFO audit trail — lot ที่ตัดจริง (หลาย lot ได้ถ้า qty ข้าม lot)
+    LotSplits     []LotDeduction // {lot_id, lot_number, expiry_date, qty}
+    LotSnapshot   *LotSnapshot   // snapshot client คาดการณ์ (ดู oversell section)
+    LotMismatch   bool           // true = FEFO actual ≠ snapshot (offline drift)
+    // Oversell: base units ขายไปโดยไม่มี lot รองรับ ณ ตอนขาย · ถูก reconcile
+    // อัตโนมัติเมื่อ import หรือ stock adjustment (+) เข้ามา · 0 = ครบแล้ว
+    OversoldQty   int
+}
+
+type LotDeduction struct {
+    LotID      bson.ObjectID  // zero = synthetic (adjustment-reconciled)
+    LotNumber  string         // "ADJUST:<reason>" เมื่อ synthetic
+    ExpiryDate time.Time
+    Qty        int            // base units ตัดจาก lot นี้
+}
+
+type LotSnapshot struct {
+    LotID      bson.ObjectID  // earliest-expiring lot ณ ตอน cashier กด checkout
+    LotNumber  string
+    ExpiryDate time.Time
 }
 ```
+
+**Invariant** หลัง reconcile แต่ละรอบ: `drug.stock ≈ Σ lot.remaining − Σ oversold_qty` (ยกเว้น stock adjustment ที่ admin override โดยตั้งใจ)
 
 `SaleResponse` ที่ส่งกลับจาก `POST /api/sales` มี `stock_updates: [{drug_id, new_stock}]` เพื่อให้ client อัปเดต state ของ drug ที่ขายไปโดยไม่ต้อง refetch ทั้ง list
 
