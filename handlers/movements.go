@@ -18,7 +18,7 @@ import (
 	mw "pharmacy-pos/backend/middleware"
 )
 
-// MovementEntry is one unified stock-movement record returned by GET /api/movements.
+// MovementEntry is one unified stock-movement record returned by GET /api/pharmacy/v1/movements.
 type MovementEntry struct {
 	ID        string    `json:"id"`
 	Type      string    `json:"type"` // import|sale|return|adjustment|writeoff
@@ -34,7 +34,7 @@ type MovementsHandler struct{ dbm *db.Manager }
 
 func NewMovementsHandler(d *db.Manager) *MovementsHandler { return &MovementsHandler{dbm: d} }
 
-// List handles GET /api/movements
+// List handles GET /api/pharmacy/v1/movements
 // Query params: from, to (YYYY-MM-DD), drug_name, types (comma-sep), limit, offset
 func (h *MovementsHandler) List(w http.ResponseWriter, r *http.Request) {
 	d, err := h.dbm.ForClient(mw.GetClientID(r.Context()))

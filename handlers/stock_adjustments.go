@@ -25,7 +25,7 @@ func NewStockAdjustmentHandler(d *db.Manager) *StockAdjustmentHandler {
 }
 
 // Create records a manual stock adjustment and atomically updates drug.stock.
-// POST /api/drugs/{id}/adjustments
+// POST /api/pharmacy/v1/drugs/{id}/adjustments
 func (h *StockAdjustmentHandler) Create(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	oid, err := bson.ObjectIDFromHex(id)
@@ -123,7 +123,7 @@ func (h *StockAdjustmentHandler) Create(w http.ResponseWriter, r *http.Request) 
 }
 
 // List returns the adjustment history for a drug, newest first.
-// GET /api/drugs/{id}/adjustments
+// GET /api/pharmacy/v1/drugs/{id}/adjustments
 func (h *StockAdjustmentHandler) List(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	oid, err := bson.ObjectIDFromHex(id)

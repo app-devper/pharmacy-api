@@ -23,7 +23,7 @@ type ReturnHandler struct{ dbm *db.Manager }
 func NewReturnHandler(d *db.Manager) *ReturnHandler { return &ReturnHandler{dbm: d} }
 
 // Create processes a partial drug return linked to an existing sale.
-// POST /api/sales/{id}/return
+// POST /api/pharmacy/v1/sales/{id}/return
 func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	oid, err := bson.ObjectIDFromHex(id)
@@ -262,7 +262,7 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 // List returns all drug returns for a sale.
-// GET /api/sales/{id}/returns
+// GET /api/pharmacy/v1/sales/{id}/returns
 func (h *ReturnHandler) List(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	oid, err := bson.ObjectIDFromHex(id)

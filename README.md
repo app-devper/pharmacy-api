@@ -88,7 +88,7 @@ go run main.go
 
 ## Authentication
 
-API ทุก endpoint ใต้ `/api/*` ต้องส่ง JWT token ใน header:
+API ทุก endpoint ใต้ `/api/pharmacy/v1/*` ต้องส่ง JWT token ใน header:
 
 ```
 Authorization: Bearer <token>
@@ -107,28 +107,28 @@ Authorization: Bearer <token>
 
 | Method | Path | คำอธิบาย |
 |--------|------|-----------|
-| `GET` | `/api/drugs` | รายการยาทั้งหมด (รองรับ `?fields=compact`) |
-| `GET` | `/api/drugs/low-stock` | ยาที่สต็อกต่ำ (threshold = `min_stock` หรือ `20` ถ้าไม่ตั้ง) |
-| `POST` | `/api/drugs` | เพิ่มยาใหม่ (ต้องมี `create_lot` เมื่อ `stock > 0`) |
-| `PUT` | `/api/drugs/:id` | แก้ไขข้อมูลยา |
-| `POST` | `/api/drugs/bulk` | นำเข้ายาจาก Excel สูงสุด 1,000 รายการ |
-| `GET` | `/api/drugs/reorder-suggestions` | แนะนำสั่งซื้อ (ADMIN) |
+| `GET` | `/api/pharmacy/v1/drugs` | รายการยาทั้งหมด (รองรับ `?fields=compact`) |
+| `GET` | `/api/pharmacy/v1/drugs/low-stock` | ยาที่สต็อกต่ำ (threshold = `min_stock` หรือ `20` ถ้าไม่ตั้ง) |
+| `POST` | `/api/pharmacy/v1/drugs` | เพิ่มยาใหม่ (ต้องมี `create_lot` เมื่อ `stock > 0`) |
+| `PUT` | `/api/pharmacy/v1/drugs/:id` | แก้ไขข้อมูลยา |
+| `POST` | `/api/pharmacy/v1/drugs/bulk` | นำเข้ายาจาก Excel สูงสุด 1,000 รายการ |
+| `GET` | `/api/pharmacy/v1/drugs/reorder-suggestions` | แนะนำสั่งซื้อ (ADMIN) |
 
-**Projection** — `GET /api/drugs?fields=compact` คืนเฉพาะ `id, name, price, cost_price, stock, barcode, reg_no, unit, report_types` เพื่อลด payload สำหรับ client ที่ไม่ต้องการข้อมูลเต็ม
+**Projection** — `GET /api/pharmacy/v1/drugs?fields=compact` คืนเฉพาะ `id, name, price, cost_price, stock, barcode, reg_no, unit, report_types` เพื่อลด payload สำหรับ client ที่ไม่ต้องการข้อมูลเต็ม
 
-**POST /api/drugs** — ถ้า `stock > 0` ต้องส่ง `create_lot: { lot_number, expiry_date, quantity, ... }` ไปพร้อมกัน → backend สร้าง Drug + DrugLot ใน transaction เดียวกัน · `create_lot.quantity` เป็นค่าที่ใช้เป็น `drug.stock` · `expiry_date` ต้องอยู่หลังวันนี้
+**POST /api/pharmacy/v1/drugs** — ถ้า `stock > 0` ต้องส่ง `create_lot: { lot_number, expiry_date, quantity, ... }` ไปพร้อมกัน → backend สร้าง Drug + DrugLot ใน transaction เดียวกัน · `create_lot.quantity` เป็นค่าที่ใช้เป็น `drug.stock` · `expiry_date` ต้องอยู่หลังวันนี้
 
 **Bulk Import** — Request: `{ "drugs": [DrugInput, ...] }` · Response: `{ "imported": N, "errors": [{ "row": N, "name": "...", "message": "..." }] }`
-ข้อผิดพลาดต่อแถวไม่หยุด batch — รายการที่สำเร็จถูก insert ต่อไป · `stock < 0` จะถูก clamp เป็น `0` · `stock > 0` ยอมรับได้โดยไม่ต้องมี lot (ต่างจาก `POST /api/drugs` ที่เข้มงวดกว่า)
+ข้อผิดพลาดต่อแถวไม่หยุด batch — รายการที่สำเร็จถูก insert ต่อไป · `stock < 0` จะถูก clamp เป็น `0` · `stock > 0` ยอมรับได้โดยไม่ต้องมี lot (ต่างจาก `POST /api/pharmacy/v1/drugs` ที่เข้มงวดกว่า)
 
-**Reorder Suggestions** — `GET /api/drugs/reorder-suggestions?days=30&lookahead=14` **sales-driven** — พิจารณาเฉพาะยาที่มีการขายในช่วง `days` เท่านั้น (ยาที่ขายช้า/ไม่เคยขายจะถูกข้าม ไม่ว่า `min_stock` จะเป็นเท่าไหร่) · คำนวณ `avg_daily_sale = qty_sold / days` → `projected_need = ceil(avg_daily × lookahead)` · คืนยาที่ `current_stock < projected_need` พร้อม `suggested_qty = projected_need − current_stock` · เรียง out-of-stock ก่อน แล้วตาม `days_left` น้อยสุด
+**Reorder Suggestions** — `GET /api/pharmacy/v1/drugs/reorder-suggestions?days=30&lookahead=14` **sales-driven** — พิจารณาเฉพาะยาที่มีการขายในช่วง `days` เท่านั้น (ยาที่ขายช้า/ไม่เคยขายจะถูกข้าม ไม่ว่า `min_stock` จะเป็นเท่าไหร่) · คำนวณ `avg_daily_sale = qty_sold / days` → `projected_need = ceil(avg_daily × lookahead)` · คืนยาที่ `current_stock < projected_need` พร้อม `suggested_qty = projected_need − current_stock` · เรียง out-of-stock ก่อน แล้วตาม `days_left` น้อยสุด
 
 ### Stock Adjustments
 
 | Method | Path | คำอธิบาย |
 |--------|------|-----------|
-| `POST` | `/api/drugs/:id/adjustments` | ปรับสต็อก (audit log · reconcile oversell เมื่อ +delta) |
-| `GET` | `/api/drugs/:id/adjustments` | ประวัติการปรับสต็อก |
+| `POST` | `/api/pharmacy/v1/drugs/:id/adjustments` | ปรับสต็อก (audit log · reconcile oversell เมื่อ +delta) |
+| `GET` | `/api/pharmacy/v1/drugs/:id/adjustments` | ประวัติการปรับสต็อก |
 
 **Oversell reconciliation on adjust** — เมื่อ `delta > 0` และ drug มี `oversold_qty` ค้าง → drain FIFO · append synthetic LotDeduction (`LotNumber: "ADJUST:<reason>"`) เข้า `SaleItem.lot_splits` · `drug.stock` **ไม่ถูก offset เพิ่ม** (delta ที่ adjust เข้ามาคือ net position ที่ admin ต้องการ) · `delta < 0` ยังคง `$gte` guard เดิม → reject ถ้า stock ไม่พอ
 
@@ -136,23 +136,23 @@ Authorization: Bearer <token>
 
 | Method | Path | คำอธิบาย |
 |--------|------|-----------|
-| `GET` | `/api/drugs/:id/lots` | รายการล็อต (เรียง expiry ASC) |
-| `POST` | `/api/drugs/:id/lots` | เพิ่มล็อต → `$inc stock` |
-| `DELETE` | `/api/drugs/:id/lots/:lot_id` | ลบล็อต → `$dec stock` ตาม remaining |
-| `GET` | `/api/lots/expiring?days=N` | ล็อตที่หมดอายุหรือจะหมดใน N วัน (default 60) |
-| `GET` | `/api/lots/expiring?expired_only=true` | เฉพาะล็อตที่ผ่านวันหมดอายุแล้ว (remaining > 0) |
-| `POST` | `/api/lots/writeoff` | ตัดจำหน่าย bulk ล็อตหมดอายุ → `$dec stock` ต่อล็อต |
+| `GET` | `/api/pharmacy/v1/drugs/:id/lots` | รายการล็อต (เรียง expiry ASC) |
+| `POST` | `/api/pharmacy/v1/drugs/:id/lots` | เพิ่มล็อต → `$inc stock` |
+| `DELETE` | `/api/pharmacy/v1/drugs/:id/lots/:lot_id` | ลบล็อต → `$dec stock` ตาม remaining |
+| `GET` | `/api/pharmacy/v1/lots/expiring?days=N` | ล็อตที่หมดอายุหรือจะหมดใน N วัน (default 60) |
+| `GET` | `/api/pharmacy/v1/lots/expiring?expired_only=true` | เฉพาะล็อตที่ผ่านวันหมดอายุแล้ว (remaining > 0) |
+| `POST` | `/api/pharmacy/v1/lots/writeoff` | ตัดจำหน่าย bulk ล็อตหมดอายุ → `$dec stock` ต่อล็อต |
 
 ### Sales
 
 | Method | Path | คำอธิบาย |
 |--------|------|-----------|
-| `POST` | `/api/sales` | บันทึกการขาย (FEFO deduction · รองรับ oversell) |
-| `GET` | `/api/sales` | ประวัติการขาย |
-| `GET` | `/api/sales/:id/items` | รายการสินค้าในใบขาย (แสดง lot_splits + oversold_qty) |
-| `POST` | `/api/sales/:id/void` | ยกเลิกใบขาย |
-| `POST` | `/api/sales/:id/return` | คืนสินค้า (เฉพาะส่วนที่ผูก real lot แล้ว) |
-| `GET` | `/api/sales/:id/returns` | ประวัติการคืนสินค้า |
+| `POST` | `/api/pharmacy/v1/sales` | บันทึกการขาย (FEFO deduction · รองรับ oversell) |
+| `GET` | `/api/pharmacy/v1/sales` | ประวัติการขาย |
+| `GET` | `/api/pharmacy/v1/sales/:id/items` | รายการสินค้าในใบขาย (แสดง lot_splits + oversold_qty) |
+| `POST` | `/api/pharmacy/v1/sales/:id/void` | ยกเลิกใบขาย |
+| `POST` | `/api/pharmacy/v1/sales/:id/return` | คืนสินค้า (เฉพาะส่วนที่ผูก real lot แล้ว) |
+| `GET` | `/api/pharmacy/v1/sales/:id/returns` | ประวัติการคืนสินค้า |
 
 **FEFO + Lot audit trail** — `SaleItem.lot_splits` บันทึกว่า qty ถูกตัดจาก lot ไหนบ้าง (เรียงตาม deduction) · `lot_snapshot` = lot ที่ client คาดการณ์ตอน checkout · `lot_mismatch: true` เมื่อ actual ≠ snapshot (มักเกิดกับ offline-queued sale ที่ sync หลังจาก lot เปลี่ยน)
 
@@ -164,62 +164,62 @@ Authorization: Bearer <token>
 
 | Method | Path | คำอธิบาย |
 |--------|------|-----------|
-| `GET` | `/api/customers` | รายการลูกค้า |
-| `POST` | `/api/customers` | เพิ่มลูกค้า |
-| `PUT` | `/api/customers/:id` | แก้ไขข้อมูลลูกค้า |
-| `GET` | `/api/customers/:id/sales` | ประวัติการซื้อของลูกค้า |
+| `GET` | `/api/pharmacy/v1/customers` | รายการลูกค้า |
+| `POST` | `/api/pharmacy/v1/customers` | เพิ่มลูกค้า |
+| `PUT` | `/api/pharmacy/v1/customers/:id` | แก้ไขข้อมูลลูกค้า |
+| `GET` | `/api/pharmacy/v1/customers/:id/sales` | ประวัติการซื้อของลูกค้า |
 
 ### Imports (Purchase Orders)
 
 | Method | Path | คำอธิบาย |
 |--------|------|-----------|
-| `GET` | `/api/imports` | รายการใบนำเข้า |
-| `POST` | `/api/imports` | สร้างใบนำเข้าใหม่ (status: draft) |
-| `GET` | `/api/imports/:id` | รายละเอียดพร้อม items |
-| `PUT` | `/api/imports/:id` | แก้ไข (draft เท่านั้น) |
-| `POST` | `/api/imports/:id/confirm` | ยืนยัน → สร้าง DrugLots + เพิ่มสต็อก |
-| `DELETE` | `/api/imports/:id` | ลบ (draft เท่านั้น) |
+| `GET` | `/api/pharmacy/v1/imports` | รายการใบนำเข้า |
+| `POST` | `/api/pharmacy/v1/imports` | สร้างใบนำเข้าใหม่ (status: draft) |
+| `GET` | `/api/pharmacy/v1/imports/:id` | รายละเอียดพร้อม items |
+| `PUT` | `/api/pharmacy/v1/imports/:id` | แก้ไข (draft เท่านั้น) |
+| `POST` | `/api/pharmacy/v1/imports/:id/confirm` | ยืนยัน → สร้าง DrugLots + เพิ่มสต็อก |
+| `DELETE` | `/api/pharmacy/v1/imports/:id` | ลบ (draft เท่านั้น) |
 
 ### Suppliers
 
 | Method | Path | คำอธิบาย |
 |--------|------|-----------|
-| `GET` | `/api/suppliers` | รายการซัพพลายเออร์ |
-| `POST` | `/api/suppliers` | เพิ่มซัพพลายเออร์ |
-| `PUT` | `/api/suppliers/:id` | แก้ไข |
-| `DELETE` | `/api/suppliers/:id` | ลบ |
+| `GET` | `/api/pharmacy/v1/suppliers` | รายการซัพพลายเออร์ |
+| `POST` | `/api/pharmacy/v1/suppliers` | เพิ่มซัพพลายเออร์ |
+| `PUT` | `/api/pharmacy/v1/suppliers/:id` | แก้ไข |
+| `DELETE` | `/api/pharmacy/v1/suppliers/:id` | ลบ |
 
 ### Reports
 
 | Method | Path | คำอธิบาย |
 |--------|------|-----------|
-| `GET` | `/api/report/summary` | สรุปภาพรวม |
-| `GET` | `/api/report/dashboard` | รวม summary + daily + monthly + recent_sales ใน 1 request |
-| `GET` | `/api/report/daily` | ยอดขายรายวัน (default 7 วัน) |
-| `GET` | `/api/report/monthly` | สรุปรายเดือน (default 12 เดือน) |
-| `GET` | `/api/report/top-drugs` | ยาขายดี |
-| `GET` | `/api/report/slow-drugs` | ยาขายช้า |
-| `GET` | `/api/report/eod` | สรุปปิดยอดประจำวัน |
-| `GET` | `/api/report/profit` | รายงานกำไร |
+| `GET` | `/api/pharmacy/v1/report/summary` | สรุปภาพรวม |
+| `GET` | `/api/pharmacy/v1/report/dashboard` | รวม summary + daily + monthly + recent_sales ใน 1 request |
+| `GET` | `/api/pharmacy/v1/report/daily` | ยอดขายรายวัน (default 7 วัน) |
+| `GET` | `/api/pharmacy/v1/report/monthly` | สรุปรายเดือน (default 12 เดือน) |
+| `GET` | `/api/pharmacy/v1/report/top-drugs` | ยาขายดี |
+| `GET` | `/api/pharmacy/v1/report/slow-drugs` | ยาขายช้า |
+| `GET` | `/api/pharmacy/v1/report/eod` | สรุปปิดยอดประจำวัน |
+| `GET` | `/api/pharmacy/v1/report/profit` | รายงานกำไร |
 
-**Dashboard** — `GET /api/report/dashboard?days=7` ใช้ goroutine + `sync.WaitGroup` fetch parallel 4 dataset (summary, daily, monthly 12m, recent 5 sales) → ลด HTTP round-trip จาก 5-6 requests เหลือ 1 request สำหรับ ReportPage initial load
+**Dashboard** — `GET /api/pharmacy/v1/report/dashboard?days=7` ใช้ goroutine + `sync.WaitGroup` fetch parallel 4 dataset (summary, daily, monthly 12m, recent 5 sales) → ลด HTTP round-trip จาก 5-6 requests เหลือ 1 request สำหรับ ReportPage initial load
 
 ### KY Forms
 
 | Method | Path | คำอธิบาย |
 |--------|------|-----------|
-| `GET/POST` | `/api/ky9` | แบบ ขย.9 |
-| `GET/POST` | `/api/ky10` | แบบ ขย.10 |
-| `GET/POST` | `/api/ky11` | แบบ ขย.11 |
-| `GET/POST` | `/api/ky12` | แบบ ขย.12 |
-| `GET` | `/api/export/:form` | Export PDF (ky9, ky10, ky11, ky12) |
+| `GET/POST` | `/api/pharmacy/v1/ky9` | แบบ ขย.9 |
+| `GET/POST` | `/api/pharmacy/v1/ky10` | แบบ ขย.10 |
+| `GET/POST` | `/api/pharmacy/v1/ky11` | แบบ ขย.11 |
+| `GET/POST` | `/api/pharmacy/v1/ky12` | แบบ ขย.12 |
+| `GET` | `/api/pharmacy/v1/export/:form` | Export PDF (ky9, ky10, ky11, ky12) |
 
 ### Settings (Singleton per tenant)
 
 | Method | Path | คำอธิบาย |
 |--------|------|-----------|
-| `GET` | `/api/settings` | ดึงการตั้งค่าร้าน · สร้าง default ถ้ายังไม่มี |
-| `PUT` | `/api/settings` | บันทึกการตั้งค่า (ADMIN/SUPER) |
+| `GET` | `/api/pharmacy/v1/settings` | ดึงการตั้งค่าร้าน · สร้าง default ถ้ายังไม่มี |
+| `PUT` | `/api/pharmacy/v1/settings` | บันทึกการตั้งค่า (ADMIN/SUPER) |
 
 รวม: ข้อมูลร้าน, ใบเสร็จ (header/footer/paper_width), Stock thresholds, เภสัชกร, ขย.toggle, และ **timezone** (IANA name) — ใช้คำนวณ "วันนี้"/"เดือนนี้" ในรายงานและ date-range filter ทั่วทั้งระบบ
 
@@ -227,7 +227,7 @@ Authorization: Bearer <token>
 
 | Method | Path | คำอธิบาย |
 |--------|------|-----------|
-| `GET` | `/api/movements` | ประวัติการเคลื่อนไหวสต็อก (นำเข้า/ขาย/คืน/ปรับ/ตัดจำหน่าย/ยกเลิก) — กรองวันที่, ประเภท, ชื่อยา |
+| `GET` | `/api/pharmacy/v1/movements` | ประวัติการเคลื่อนไหวสต็อก (นำเข้า/ขาย/คืน/ปรับ/ตัดจำหน่าย/ยกเลิก) — กรองวันที่, ประเภท, ชื่อยา |
 
 ---
 
@@ -260,23 +260,23 @@ Bootstrap (main.go): `000` ถูก warm-up โดย `CreateIndexesForClient("
 
 ### Endpoints ที่ต้องการ ADMIN หรือ SUPER
 
-- `POST /api/drugs`, `PUT /api/drugs/:id`, `POST /api/drugs/bulk`, `GET /api/drugs/reorder-suggestions`
-- `POST /api/drugs/:id/adjustments`, `POST /api/drugs/:id/lots`, `DELETE /api/drugs/:id/lots/:lot_id`, `POST /api/lots/writeoff`
-- `PUT /api/customers/:id`
-- `POST /api/sales/:id/void`
-- `GET /api/report/eod`, `GET /api/report/profit`
-- `GET|POST /api/ky9`, `GET|POST /api/ky10`, `GET|POST /api/ky11`, `GET|POST /api/ky12`
-- `/api/imports/*` ทั้งหมด
-- `/api/suppliers/*` ทั้งหมด
-- `GET /api/export/:form`
+- `POST /api/pharmacy/v1/drugs`, `PUT /api/pharmacy/v1/drugs/:id`, `POST /api/pharmacy/v1/drugs/bulk`, `GET /api/pharmacy/v1/drugs/reorder-suggestions`
+- `POST /api/pharmacy/v1/drugs/:id/adjustments`, `POST /api/pharmacy/v1/drugs/:id/lots`, `DELETE /api/pharmacy/v1/drugs/:id/lots/:lot_id`, `POST /api/pharmacy/v1/lots/writeoff`
+- `PUT /api/pharmacy/v1/customers/:id`
+- `POST /api/pharmacy/v1/sales/:id/void`
+- `GET /api/pharmacy/v1/report/eod`, `GET /api/pharmacy/v1/report/profit`
+- `GET|POST /api/pharmacy/v1/ky9`, `GET|POST /api/pharmacy/v1/ky10`, `GET|POST /api/pharmacy/v1/ky11`, `GET|POST /api/pharmacy/v1/ky12`
+- `/api/pharmacy/v1/imports/*` ทั้งหมด
+- `/api/pharmacy/v1/suppliers/*` ทั้งหมด
+- `GET /api/pharmacy/v1/export/:form`
 
 ### Endpoints ที่ USER เข้าถึงได้
 
-`GET /api/drugs`, `GET /api/drugs/low-stock`, `GET /api/drugs/:id/lots`, `GET /api/lots/expiring`,
-`GET|POST /api/customers`, `GET /api/customers/:id/sales`,
-`GET|POST /api/sales`, `GET /api/sales/:id/items`, `POST /api/sales/:id/return`, `GET /api/sales/:id/returns`,
-`GET /api/report/summary`, `GET /api/report/dashboard`, `GET /api/report/daily`, `GET /api/report/monthly`, `GET /api/report/top-drugs`, `GET /api/report/slow-drugs`,
-`GET /api/movements`
+`GET /api/pharmacy/v1/drugs`, `GET /api/pharmacy/v1/drugs/low-stock`, `GET /api/pharmacy/v1/drugs/:id/lots`, `GET /api/pharmacy/v1/lots/expiring`,
+`GET|POST /api/pharmacy/v1/customers`, `GET /api/pharmacy/v1/customers/:id/sales`,
+`GET|POST /api/pharmacy/v1/sales`, `GET /api/pharmacy/v1/sales/:id/items`, `POST /api/pharmacy/v1/sales/:id/return`, `GET /api/pharmacy/v1/sales/:id/returns`,
+`GET /api/pharmacy/v1/report/summary`, `GET /api/pharmacy/v1/report/dashboard`, `GET /api/pharmacy/v1/report/daily`, `GET /api/pharmacy/v1/report/monthly`, `GET /api/pharmacy/v1/report/top-drugs`, `GET /api/pharmacy/v1/report/slow-drugs`,
+`GET /api/pharmacy/v1/movements`
 
 ---
 
@@ -311,7 +311,7 @@ type Drug struct {
 
 **Negative stock** — `drug.stock` ยอมให้ติดลบได้ จากการ oversell เท่านั้น · Stock adjustment (-) ใช้ `$gte` guard ป้องกันไม่ให้ลบเพิ่ม · Display layer แสดง badge "ค้างส่ง" และ tooltip "รอ reconcile" ใน `StockPage`
 
-**การสร้างยา** — `POST /api/drugs` เข้มงวด: ถ้า `stock > 0` ต้องมี `create_lot` ไปด้วยเสมอ → backend ทำ transaction สร้าง Drug + DrugLot พร้อมกัน จึงการันตีว่า `drug.stock` มาพร้อม lot จริงเสมอ (FEFO ทำงานถูก) · `POST /api/drugs/bulk` ผ่อนคลายกฎนี้ — ยอม import ยาที่มี stock ค้างไว้ก่อน แล้วไปเพิ่ม lot ภายหลัง
+**การสร้างยา** — `POST /api/pharmacy/v1/drugs` เข้มงวด: ถ้า `stock > 0` ต้องมี `create_lot` ไปด้วยเสมอ → backend ทำ transaction สร้าง Drug + DrugLot พร้อมกัน จึงการันตีว่า `drug.stock` มาพร้อม lot จริงเสมอ (FEFO ทำงานถูก) · `POST /api/pharmacy/v1/drugs/bulk` ผ่อนคลายกฎนี้ — ยอม import ยาที่มี stock ค้างไว้ก่อน แล้วไปเพิ่ม lot ภายหลัง
 
 ### Multi-unit & Multi-tier Pricing
 
@@ -412,7 +412,7 @@ type LotSnapshot struct {
 
 **Invariant** หลัง reconcile แต่ละรอบ: `drug.stock ≈ Σ lot.remaining − Σ oversold_qty` (ยกเว้น stock adjustment ที่ admin override โดยตั้งใจ)
 
-`SaleResponse` ที่ส่งกลับจาก `POST /api/sales` มี `stock_updates: [{drug_id, new_stock}]` เพื่อให้ client อัปเดต state ของ drug ที่ขายไปโดยไม่ต้อง refetch ทั้ง list
+`SaleResponse` ที่ส่งกลับจาก `POST /api/pharmacy/v1/sales` มี `stock_updates: [{drug_id, new_stock}]` เพื่อให้ client อัปเดต state ของ drug ที่ขายไปโดยไม่ต้อง refetch ทั้ง list
 
 ### Customer
 
@@ -429,7 +429,7 @@ type Customer struct {
 }
 ```
 
-**Duplicate phone** — ตั้งแต่เพิ่ม partial unique index บน `phone` (เฉพาะ non-empty) → `POST`/`PUT /api/customers` จะคืน `409 Conflict` ถ้าเบอร์นี้มีอยู่ในระบบแล้ว
+**Duplicate phone** — ตั้งแต่เพิ่ม partial unique index บน `phone` (เฉพาะ non-empty) → `POST`/`PUT /api/pharmacy/v1/customers` จะคืน `409 Conflict` ถ้าเบอร์นี้มีอยู่ในระบบแล้ว
 
 ### Supplier
 

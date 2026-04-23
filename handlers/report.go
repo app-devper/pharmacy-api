@@ -429,7 +429,7 @@ func (h *ReportHandler) Monthly(w http.ResponseWriter, r *http.Request) {
 
 // Dashboard bundles summary + daily + monthly + recent_sales into a single response
 // so ReportPage only makes one HTTP call on initial load.
-// GET /api/report/dashboard?days=7
+// GET /api/pharmacy/v1/report/dashboard?days=7
 func (h *ReportHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	days := 7
 	if d, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil && d > 0 && d <= 365 {

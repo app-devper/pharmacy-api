@@ -483,7 +483,7 @@ type BulkImportResult struct {
 
 // BulkImport accepts a JSON array of DrugInput, inserts each one individually,
 // and returns a per-row error report rather than failing the whole batch.
-// POST /api/drugs/bulk  (ADMIN+)
+// POST /api/pharmacy/v1/drugs/bulk  (ADMIN+)
 func (h *DrugHandler) BulkImport(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Drugs []models.DrugInput `json:"drugs"`
@@ -571,7 +571,7 @@ func (h *DrugHandler) BulkImport(w http.ResponseWriter, r *http.Request) {
 }
 
 // LowStock returns drugs where min_stock > 0 AND stock <= min_stock, sorted by stock ASC.
-// GET /api/drugs/low-stock
+// GET /api/pharmacy/v1/drugs/low-stock
 func (h *DrugHandler) LowStock(w http.ResponseWriter, r *http.Request) {
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
@@ -624,7 +624,7 @@ func (h *DrugHandler) LowStock(w http.ResponseWriter, r *http.Request) {
 //   - days       (default 30)   lookback window for averaging sales
 //   - lookahead  (default 14)   target cover days; suggest = ceil(avg_daily × lookahead) − stock
 //
-// GET /api/drugs/reorder-suggestions
+// GET /api/pharmacy/v1/drugs/reorder-suggestions
 func (h *DrugHandler) ReorderSuggestions(w http.ResponseWriter, r *http.Request) {
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {

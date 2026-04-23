@@ -36,7 +36,7 @@ func Setup(
 	r.Use(chimiddleware.Recoverer)
 	r.Use(mw.CORS())
 
-	r.Route("/api", func(r chi.Router) {
+	r.Route("/api/pharmacy/v1", func(r chi.Router) {
 		r.Use(mw.RequireAuth(secretKey, authSystem))
 
 		// ── USER + ADMIN + SUPER ──────────────────────────────────

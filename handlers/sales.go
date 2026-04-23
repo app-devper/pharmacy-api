@@ -233,7 +233,7 @@ func (h *SaleHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Collect fresh stock values for each drug we just sold so the client can patch
-	// local state without hitting GET /api/drugs again. One query per unique drug.
+	// local state without hitting GET /api/pharmacy/v1/drugs again. One query per unique drug.
 	updates := make([]models.StockUpdate, 0, len(preparedItems))
 	seen := make(map[bson.ObjectID]struct{}, len(preparedItems))
 	for _, it := range preparedItems {

@@ -91,7 +91,7 @@ type DrugInput struct {
 	CreateLot   *DrugLotInput `json:"create_lot,omitempty"`
 }
 
-// ReorderSuggestion is returned by GET /api/drugs/reorder-suggestions.
+// ReorderSuggestion is returned by GET /api/pharmacy/v1/drugs/reorder-suggestions.
 // DaysLeft uses sentinel 9999 when AvgDailySale == 0 (never sells / no data).
 type ReorderSuggestion struct {
 	DrugID       string  `json:"drug_id"`

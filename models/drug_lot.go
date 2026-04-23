@@ -24,7 +24,7 @@ type DrugLot struct {
 	CreatedAt  time.Time     `bson:"created_at"     json:"created_at"`
 }
 
-// ExpiringLotItem is returned by GET /api/lots/expiring.
+// ExpiringLotItem is returned by GET /api/pharmacy/v1/lots/expiring.
 type ExpiringLotItem struct {
 	ID         bson.ObjectID `json:"id"`
 	DrugID     bson.ObjectID `json:"drug_id"`

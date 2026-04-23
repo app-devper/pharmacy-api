@@ -162,8 +162,8 @@ func (h *DrugLotHandler) AddLot(w http.ResponseWriter, r *http.Request) {
 }
 
 // Expiring returns lots that still have remaining stock, filtered by expiry window.
-// GET /api/lots/expiring?days=60         — lots expiring within N days (default from Settings, includes already-expired)
-// GET /api/lots/expiring?expired_only=true — only lots whose expiry_date is already in the past
+// GET /api/pharmacy/v1/lots/expiring?days=60         — lots expiring within N days (default from Settings, includes already-expired)
+// GET /api/pharmacy/v1/lots/expiring?expired_only=true — only lots whose expiry_date is already in the past
 func (h *DrugLotHandler) Expiring(w http.ResponseWriter, r *http.Request) {
 	expiredOnly := r.URL.Query().Get("expired_only") == "true"
 
@@ -235,7 +235,7 @@ func (h *DrugLotHandler) Expiring(w http.ResponseWriter, r *http.Request) {
 }
 
 // WriteoffLots bulk-deletes a set of lots and decrements each drug's stock accordingly.
-// POST /api/lots/writeoff   body: {"lot_ids": ["<hex>", ...]}
+// POST /api/pharmacy/v1/lots/writeoff   body: {"lot_ids": ["<hex>", ...]}
 func (h *DrugLotHandler) WriteoffLots(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		LotIDs []string `json:"lot_ids"`

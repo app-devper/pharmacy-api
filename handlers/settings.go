@@ -50,7 +50,7 @@ func loadStockSettings(ctx context.Context, mdb *db.MongoDB) models.StockSetting
 }
 
 // Get returns the tenant's settings document, creating a default if none exists.
-// GET /api/settings
+// GET /api/pharmacy/v1/settings
 func (h *SettingsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
@@ -77,7 +77,7 @@ func (h *SettingsHandler) Get(w http.ResponseWriter, r *http.Request) {
 }
 
 // Update upserts the settings document. ADMIN or SUPER only.
-// PUT /api/settings
+// PUT /api/pharmacy/v1/settings
 func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	var input models.SettingsInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
