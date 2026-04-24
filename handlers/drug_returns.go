@@ -212,7 +212,7 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 				return mongo.ErrNoDocuments
 			}
 
-			if err := h.restoreReturnItemLots(txCtx, mdb, si, inp.Qty); err != nil {
+			if err := restoreSaleItemLots(txCtx, mdb, si, inp.Qty, currentReturned[inp.SaleItemID]); err != nil {
 				return err
 			}
 		}
@@ -298,57 +298,4 @@ func (h *ReturnHandler) List(w http.ResponseWriter, r *http.Request) {
 		returns = []models.DrugReturn{}
 	}
 	jsonOK(w, returns)
-}
-
-func (h *ReturnHandler) restoreReturnItemLots(ctx context.Context, mdb *db.MongoDB, item models.SaleItem, qty int) error {
-	// Restore to ASC (earliest-expiry first) to mirror FEFO deduction order
-	lotCur, err := mdb.DrugLots().Find(ctx,
-		bson.M{"drug_id": item.DrugID},
-		options.Find().SetSort(bson.D{{Key: "expiry_date", Value: 1}}),
-	)
-	if err != nil {
-		return err
-	}
-	defer lotCur.Close(ctx)
-
-	var lots []models.DrugLot
-	if err := lotCur.All(ctx, &lots); err != nil {
-		return err
-	}
-	if len(lots) == 0 {
-		return nil
-	}
-
-	need := qty
-	for _, lot := range lots {
-		if need <= 0 {
-			break
-		}
-		canRestore := lot.Quantity - lot.Remaining
-		if canRestore <= 0 {
-			continue
-		}
-
-		restore := canRestore
-		if restore > need {
-			restore = need
-		}
-
-		res, err := mdb.DrugLots().UpdateOne(ctx,
-			bson.M{"_id": lot.ID, "remaining": bson.M{"$lte": lot.Quantity - restore}},
-			bson.M{"$inc": bson.M{"remaining": restore}},
-		)
-		if err != nil {
-			return err
-		}
-		if res.MatchedCount == 0 {
-			return fmt.Errorf("failed to restore lot inventory for %s", item.DrugName)
-		}
-		need -= restore
-	}
-
-	if need > 0 {
-		return fmt.Errorf("failed to fully restore lot inventory for %s", item.DrugName)
-	}
-	return nil
 }

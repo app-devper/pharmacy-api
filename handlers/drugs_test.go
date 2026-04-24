@@ -7,28 +7,16 @@ import (
 	"pharmacy-pos/backend/models"
 )
 
-func TestBuildDrugCreatePayloadWithoutLotKeepsStock(t *testing.T) {
+func TestBuildDrugCreatePayloadWithoutLotRejectsPositiveStock(t *testing.T) {
 	now := time.Date(2026, 4, 18, 10, 0, 0, 0, time.Local)
-	drug, lot, err := buildDrugCreatePayload(models.DrugInput{
+	_, _, err := buildDrugCreatePayload(models.DrugInput{
 		Name:      "Paracetamol",
 		Stock:     12,
 		SellPrice: 20,
 		CostPrice: 10,
 	}, now)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	if lot != nil {
-		t.Fatalf("expected no lot, got %+v", lot)
-	}
-	if drug.Stock != 12 {
-		t.Fatalf("expected stock 12, got %d", drug.Stock)
-	}
-	if drug.Type != "ยาสามัญ" {
-		t.Fatalf("expected default type, got %q", drug.Type)
-	}
-	if drug.Unit != "ชิ้น" {
-		t.Fatalf("expected default unit, got %q", drug.Unit)
+	if err == nil || err.Error() != "create_lot is required when stock > 0" {
+		t.Fatalf("expected create_lot validation error, got %v", err)
 	}
 }
 

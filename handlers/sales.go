@@ -43,7 +43,7 @@ type preparedSaleItem struct {
 	PriceTier     string // "" | retail | regular | wholesale
 	// Forwarded from SaleItemInput — lets applySaleItem compare the client's
 	// expected lot against the actual FEFO deduction.
-	LotSnapshot   *models.LotSnapshot
+	LotSnapshot *models.LotSnapshot
 	// When true, applySaleItem records any stock shortfall as OversoldQty
 	// instead of failing. Reconciled against the next import lot.
 	AllowOversell bool
@@ -126,6 +126,7 @@ func (h *SaleHandler) Create(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "items is required", http.StatusBadRequest)
 		return
 	}
+	input.ClientRequestID = strings.TrimSpace(input.ClientRequestID)
 
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
@@ -134,6 +135,12 @@ func (h *SaleHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
+
+	if input.ClientRequestID != "" {
+		if handled := h.writeExistingSaleResponse(ctx, mdb, input.ClientRequestID, w); handled {
+			return
+		}
+	}
 
 	preparedItems, subtotal, err := h.prepareSaleItems(ctx, mdb, input.Items)
 	if err != nil {
@@ -183,14 +190,15 @@ func (h *SaleHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 
 		sale := models.Sale{
-			BillNo:       generatedBillNo,
-			CustomerID:   customerID,
-			CustomerName: customerName,
-			Discount:     discount,
-			Total:        total,
-			Received:     received,
-			Change:       change,
-			SoldAt:       now,
+			BillNo:          generatedBillNo,
+			ClientRequestID: input.ClientRequestID,
+			CustomerID:      customerID,
+			CustomerName:    customerName,
+			Discount:        discount,
+			Total:           total,
+			Received:        received,
+			Change:          change,
+			SoldAt:          now,
 		}
 		res, err := mdb.Sales().InsertOne(txCtx, sale)
 		if err != nil {
@@ -223,6 +231,11 @@ func (h *SaleHandler) Create(w http.ResponseWriter, r *http.Request) {
 		billNo = generatedBillNo
 		return nil
 	}); err != nil {
+		if input.ClientRequestID != "" && isMongoDuplicate(err) {
+			if handled := h.writeExistingSaleResponse(ctx, mdb, input.ClientRequestID, w); handled {
+				return
+			}
+		}
 		switch {
 		case errors.Is(err, mongo.ErrNoDocuments):
 			jsonError(w, "drug not found", http.StatusBadRequest)
@@ -255,6 +268,21 @@ func (h *SaleHandler) Create(w http.ResponseWriter, r *http.Request) {
 		BillNo: billNo, Discount: discount, Total: total, Change: change,
 		StockUpdates: updates,
 	})
+}
+
+func (h *SaleHandler) writeExistingSaleResponse(ctx context.Context, mdb *db.MongoDB, clientRequestID string, w http.ResponseWriter) bool {
+	var sale models.Sale
+	err := mdb.Sales().FindOne(ctx, bson.M{"client_request_id": clientRequestID}).Decode(&sale)
+	if err != nil {
+		return false
+	}
+	jsonOK(w, models.SaleResponse{
+		BillNo:   sale.BillNo,
+		Discount: sale.Discount,
+		Total:    sale.Total,
+		Change:   sale.Change,
+	})
+	return true
 }
 
 func (h *SaleHandler) prepareSaleItems(ctx context.Context, mdb *db.MongoDB, inputs []models.SaleItemInput) ([]preparedSaleItem, float64, error) {
@@ -749,9 +777,7 @@ func (h *SaleHandler) Void(w http.ResponseWriter, r *http.Request) {
 				lotCovered = restoreQty
 			}
 			if lotCovered > 0 {
-				restoreItem := item
-				restoreItem.Qty = lotCovered
-				if err := h.restoreSaleItemLots(txCtx, mdb, restoreItem); err != nil {
+				if err := restoreSaleItemLots(txCtx, mdb, item, lotCovered, returnedByItem[item.ID]); err != nil {
 					return err
 				}
 			}
@@ -791,40 +817,33 @@ func (h *SaleHandler) Void(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]bool{"ok": true})
 }
 
-func (h *SaleHandler) restoreSaleItemLots(ctx context.Context, mdb *db.MongoDB, item models.SaleItem) error {
-	// Restore to ASC (earliest-expiry first) to mirror FEFO deduction order
-	lotCur, err := mdb.DrugLots().Find(ctx,
-		bson.M{"drug_id": item.DrugID},
-		options.Find().SetSort(bson.D{{Key: "expiry_date", Value: 1}}),
-	)
-	if err != nil {
-		return err
-	}
-	defer lotCur.Close(ctx)
-
-	var lots []models.DrugLot
-	if err := lotCur.All(ctx, &lots); err != nil {
-		return err
-	}
-
-	need := item.Qty
-	for _, lot := range lots {
+func restoreSaleItemLots(ctx context.Context, mdb *db.MongoDB, item models.SaleItem, qty int, skipRealLotQty int) error {
+	need := qty
+	skip := skipRealLotQty
+	for _, split := range item.LotSplits {
 		if need <= 0 {
 			break
 		}
-
-		canRestore := lot.Quantity - lot.Remaining
-		if canRestore <= 0 {
+		if split.LotID.IsZero() || split.Qty <= 0 {
 			continue
 		}
 
-		restore := canRestore
+		availableFromSplit := split.Qty
+		if skip > 0 {
+			if skip >= availableFromSplit {
+				skip -= availableFromSplit
+				continue
+			}
+			availableFromSplit -= skip
+			skip = 0
+		}
+		restore := availableFromSplit
 		if restore > need {
 			restore = need
 		}
 
 		res, err := mdb.DrugLots().UpdateOne(ctx,
-			bson.M{"_id": lot.ID, "remaining": bson.M{"$lte": lot.Quantity - restore}},
+			bson.M{"_id": split.LotID, "drug_id": item.DrugID},
 			bson.M{"$inc": bson.M{"remaining": restore}},
 		)
 		if err != nil {
@@ -837,7 +856,7 @@ func (h *SaleHandler) restoreSaleItemLots(ctx context.Context, mdb *db.MongoDB, 
 		need -= restore
 	}
 
-	if len(lots) > 0 && need > 0 {
+	if need > 0 {
 		return fmt.Errorf("failed to fully restore lot inventory for %s", item.DrugName)
 	}
 
@@ -914,10 +933,10 @@ func reconcileOversoldFromAdjustment(ctx context.Context, mdb *db.MongoDB, drugI
 //
 // Processed in sold_at ASC order — the oldest debt gets paid first. For each
 // eligible SaleItem the function:
-//   1. Chooses `drain = min(lot.remaining, si.oversold_qty)`.
-//   2. Decrements the lot via `$inc remaining -drain` with a `$gte` guard.
-//   3. Decrements `oversold_qty` on the SaleItem and appends a LotDeduction
-//      to `lot_splits` so the audit trail for that sale becomes complete.
+//  1. Chooses `drain = min(lot.remaining, si.oversold_qty)`.
+//  2. Decrements the lot via `$inc remaining -drain` with a `$gte` guard.
+//  3. Decrements `oversold_qty` on the SaleItem and appends a LotDeduction
+//     to `lot_splits` so the audit trail for that sale becomes complete.
 //
 // drug.stock is deliberately NOT touched — the oversold sale already debited
 // it at sale time, and the caller just credited it with the full lot.Qty.

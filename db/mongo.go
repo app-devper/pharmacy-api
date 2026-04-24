@@ -161,7 +161,7 @@ func (m *Manager) SeedForClient(ctx context.Context, clientID string) error {
 
 func (m *MongoDB) WithTransaction(ctx context.Context, fn func(context.Context) error) error {
 	if !m.supportsTransactions {
-		return fn(ctx)
+		return fmt.Errorf("MongoDB transactions are required for this operation; run MongoDB as a replica set or sharded cluster")
 	}
 
 	sess, err := m.client.StartSession()
@@ -224,6 +224,14 @@ func (m *MongoDB) CreateIndexes(ctx context.Context) error {
 	if _, err := m.Sales().Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "bill_no", Value: 1}},
 		Options: options.Index().SetUnique(true),
+	}); err != nil {
+		return err
+	}
+	if _, err := m.Sales().Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "client_request_id", Value: 1}},
+		Options: options.Index().SetUnique(true).SetPartialFilterExpression(
+			bson.M{"client_request_id": bson.M{"$type": "string", "$gt": ""}},
+		),
 	}); err != nil {
 		return err
 	}

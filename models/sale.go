@@ -7,18 +7,19 @@ import (
 )
 
 type Sale struct {
-	ID           bson.ObjectID  `bson:"_id,omitempty"  json:"id"`
-	BillNo       string         `bson:"bill_no"        json:"bill_no"`
-	CustomerID   *bson.ObjectID `bson:"customer_id"    json:"customer_id"`
-	CustomerName string         `bson:"customer_name"  json:"customer_name"`
-	Discount     float64        `bson:"discount"       json:"discount"`
-	Total        float64        `bson:"total"          json:"total"`
-	Received     float64        `bson:"received"       json:"received"`
-	Change       float64        `bson:"change"         json:"change"`
-	SoldAt       time.Time      `bson:"sold_at"        json:"sold_at"`
-	Voided       bool           `bson:"voided,omitempty"       json:"voided,omitempty"`
-	VoidReason   string         `bson:"void_reason,omitempty"  json:"void_reason,omitempty"`
-	VoidedAt     *time.Time     `bson:"voided_at,omitempty"    json:"voided_at,omitempty"`
+	ID              bson.ObjectID  `bson:"_id,omitempty"  json:"id"`
+	BillNo          string         `bson:"bill_no"        json:"bill_no"`
+	ClientRequestID string         `bson:"client_request_id,omitempty" json:"client_request_id,omitempty"`
+	CustomerID      *bson.ObjectID `bson:"customer_id"    json:"customer_id"`
+	CustomerName    string         `bson:"customer_name"  json:"customer_name"`
+	Discount        float64        `bson:"discount"       json:"discount"`
+	Total           float64        `bson:"total"          json:"total"`
+	Received        float64        `bson:"received"       json:"received"`
+	Change          float64        `bson:"change"         json:"change"`
+	SoldAt          time.Time      `bson:"sold_at"        json:"sold_at"`
+	Voided          bool           `bson:"voided,omitempty"       json:"voided,omitempty"`
+	VoidReason      string         `bson:"void_reason,omitempty"  json:"void_reason,omitempty"`
+	VoidedAt        *time.Time     `bson:"voided_at,omitempty"    json:"voided_at,omitempty"`
 }
 
 // LotDeduction records one lot the FEFO engine pulled from when fulfilling a
@@ -48,7 +49,7 @@ type SaleItem struct {
 	SaleID        bson.ObjectID `bson:"sale_id"           json:"sale_id"`
 	DrugID        bson.ObjectID `bson:"drug_id"           json:"drug_id"`
 	DrugName      string        `bson:"drug_name"         json:"drug_name"`
-	Qty           int           `bson:"qty"               json:"qty"` // always in BASE units
+	Qty           int           `bson:"qty"               json:"qty"`   // always in BASE units
 	Price         float64       `bson:"price"             json:"price"` // per BASE unit, post item-discount
 	OriginalPrice float64       `bson:"original_price"    json:"original_price"`
 	ItemDiscount  float64       `bson:"item_discount"     json:"item_discount"` // per-base-unit discount
@@ -60,16 +61,16 @@ type SaleItem struct {
 	Unit       string `bson:"unit,omitempty"        json:"unit"`
 	UnitFactor int    `bson:"unit_factor,omitempty" json:"unit_factor"`
 	// Pricing tier applied to this line. "" = retail (default).
-	PriceTier  string `bson:"price_tier,omitempty"  json:"price_tier"`
+	PriceTier string `bson:"price_tier,omitempty"  json:"price_tier"`
 	// FEFO audit trail — which lots were actually deducted. Empty when the
 	// drug has no lots at all (legacy stock-only mode).
-	LotSplits    []LotDeduction `bson:"lot_splits,omitempty"    json:"lot_splits,omitempty"`
+	LotSplits []LotDeduction `bson:"lot_splits,omitempty"    json:"lot_splits,omitempty"`
 	// Client hint captured at checkout. Non-nil only when the client sent
 	// one. Lets offline-queued sales flag unexpected FEFO drift on replay.
-	LotSnapshot  *LotSnapshot   `bson:"lot_snapshot,omitempty"  json:"lot_snapshot,omitempty"`
+	LotSnapshot *LotSnapshot `bson:"lot_snapshot,omitempty"  json:"lot_snapshot,omitempty"`
 	// True when a LotSnapshot was provided AND the FEFO engine deducted from
 	// a different lot than the snapshot's. Used for compliance reconciliation.
-	LotMismatch  bool           `bson:"lot_mismatch,omitempty"  json:"lot_mismatch,omitempty"`
+	LotMismatch bool `bson:"lot_mismatch,omitempty"  json:"lot_mismatch,omitempty"`
 	// Base units sold without lot coverage — the cashier explicitly confirmed
 	// "sell now, reconcile later" (AllowOversell). Decremented when a future
 	// Import absorbs against it; reaches 0 once the oversold portion has a
@@ -84,9 +85,9 @@ type SaleItemInput struct {
 	Price         float64      `json:"price"`
 	OriginalPrice float64      `json:"original_price"`
 	ItemDiscount  float64      `json:"item_discount"`
-	Unit          string       `json:"unit"`         // alt-unit display name, "" = base
-	UnitFactor    int          `json:"unit_factor"`  // 0 or 1 = base
-	PriceTier     string       `json:"price_tier"`   // "" | retail | regular | wholesale
+	Unit          string       `json:"unit"`                   // alt-unit display name, "" = base
+	UnitFactor    int          `json:"unit_factor"`            // 0 or 1 = base
+	PriceTier     string       `json:"price_tier"`             // "" | retail | regular | wholesale
 	LotSnapshot   *LotSnapshot `json:"lot_snapshot,omitempty"` // optional FEFO hint
 	// AllowOversell opts this line into "sell now, stock later" — the sale
 	// succeeds even if drug.stock < qty. The shortfall is recorded as
@@ -96,10 +97,11 @@ type SaleItemInput struct {
 }
 
 type SaleInput struct {
-	CustomerID *string         `json:"customer_id"`
-	Items      []SaleItemInput `json:"items"`
-	Discount   float64         `json:"discount"`
-	Received   float64         `json:"received"`
+	ClientRequestID string          `json:"client_request_id,omitempty"`
+	CustomerID      *string         `json:"customer_id"`
+	Items           []SaleItemInput `json:"items"`
+	Discount        float64         `json:"discount"`
+	Received        float64         `json:"received"`
 }
 
 // StockUpdate is an optimistic-update hint for the client: after a sale succeeds,
