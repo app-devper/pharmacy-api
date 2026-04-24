@@ -132,6 +132,15 @@ Authorization: Bearer <token>
 
 **Oversell reconciliation on adjust** — เมื่อ `delta > 0` และ drug มี `oversold_qty` ค้าง → drain FIFO · append synthetic LotDeduction (`LotNumber: "ADJUST:<reason>"`) เข้า `SaleItem.lot_splits` · `drug.stock` **ไม่ถูก offset เพิ่ม** (delta ที่ adjust เข้ามาคือ net position ที่ admin ต้องการ) · `delta < 0` ยังคง `$gte` guard เดิม → reject ถ้า stock ไม่พอ
 
+### Stock Counts (Cycle Count)
+
+| Method | Path | คำอธิบาย |
+|--------|------|-----------|
+| `GET` | `/api/pharmacy/v1/stock-counts?limit=20` | ประวัติรอบตรวจนับล่าสุด (ADMIN) |
+| `POST` | `/api/pharmacy/v1/stock-counts` | บันทึกรอบตรวจนับและปรับสต็อกแบบ batch (ADMIN) |
+
+**POST /stock-counts** — Request: `{ "note": "...", "items": [{ "drug_id": "...", "counted": 12 }] }` · backend สร้างเลข `SC-YYMMDD-NNN`, อ่าน `drug.stock` ปัจจุบันเป็น `system_stock`, คำนวณ `delta = counted - system_stock`, set `drug.stock = counted`, และสร้าง `StockAdjustment{reason:"นับสต็อก"}` ให้เฉพาะรายการที่มีส่วนต่างใน transaction เดียวกัน · `delta > 0` จะ reconcile oversold FIFO เหมือน manual positive adjustment
+
 ### Drug Lots (FEFO)
 
 | Method | Path | คำอธิบาย |
@@ -461,6 +470,29 @@ type StockAdjustment struct {
     Reason    string         // เหตุผล
     Note      string         // หมายเหตุ
     CreatedAt time.Time      // วันที่สร้าง
+}
+```
+
+### Stock Count
+
+รอบตรวจนับสต็อกแบบ batch ที่ผูกกับ `StockAdjustment` ต่อรายการที่มีส่วนต่าง
+
+```go
+type StockCount struct {
+    ID        bson.ObjectID     // id
+    CountNo   string            // SC-YYMMDD-NNN
+    Note      string            // หมายเหตุรอบตรวจนับ
+    Items     []StockCountItem  // รายการที่นับ
+    CreatedAt time.Time         // วันที่สร้าง
+}
+
+type StockCountItem struct {
+    DrugID      bson.ObjectID  // อ้างอิงยา
+    DrugName    string         // ชื่อยา ณ ตอนตรวจนับ
+    Unit        string         // หน่วยหลัก
+    SystemStock int            // stock ในระบบก่อนปรับ
+    Counted     int            // จำนวนที่นับได้จริง
+    Delta       int            // Counted - SystemStock
 }
 ```
 
