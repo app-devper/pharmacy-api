@@ -25,6 +25,7 @@ func Setup(
 	ih *handlers.ImportHandler,
 	suph *handlers.SupplierHandler,
 	ah *handlers.StockAdjustmentHandler,
+	sch *handlers.StockCountHandler,
 	reth *handlers.ReturnHandler,
 	mvh *handlers.MovementsHandler,
 	seth *handlers.SettingsHandler,
@@ -85,6 +86,8 @@ func Setup(
 			r.Put("/drugs/{id}", dh.Update)
 			r.Post("/drugs/{id}/adjustments", ah.Create)
 			r.Get("/drugs/{id}/adjustments", ah.List)
+			r.Get("/stock-counts", sch.List)
+			r.Post("/stock-counts", sch.Create)
 			r.Post("/drugs/{id}/lots", lh.AddLot)
 			r.Delete("/drugs/{id}/lots/{lot_id}", lh.DeleteLot)
 			r.Post("/lots/writeoff", lh.WriteoffLots)

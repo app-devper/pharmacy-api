@@ -42,12 +42,13 @@ func main() {
 	ih := handlers.NewImportHandler(manager)
 	suph := handlers.NewSupplierHandler(manager)
 	ah := handlers.NewStockAdjustmentHandler(manager)
+	sch := handlers.NewStockCountHandler(manager)
 	reth := handlers.NewReturnHandler(manager)
 	mvh := handlers.NewMovementsHandler(manager)
 	seth := handlers.NewSettingsHandler(manager)
 
 	r := routes.Setup(
-		dh, lh, ch, sh, rh, kh, eh, ih, suph, ah, reth, mvh, seth,
+		dh, lh, ch, sh, rh, kh, eh, ih, suph, ah, sch, reth, mvh, seth,
 		cfg.SecretKey, cfg.System,
 	)
 

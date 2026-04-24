@@ -200,6 +200,7 @@ func (m *MongoDB) Ky12() *mongo.Collection             { return m.db.Collection(
 func (m *MongoDB) PurchaseOrders() *mongo.Collection   { return m.db.Collection("purchase_orders") }
 func (m *MongoDB) Suppliers() *mongo.Collection        { return m.db.Collection("suppliers") }
 func (m *MongoDB) StockAdjustments() *mongo.Collection { return m.db.Collection("stock_adjustments") }
+func (m *MongoDB) StockCounts() *mongo.Collection      { return m.db.Collection("stock_counts") }
 func (m *MongoDB) DrugReturns() *mongo.Collection      { return m.db.Collection("drug_returns") }
 func (m *MongoDB) LotWriteoffs() *mongo.Collection     { return m.db.Collection("lot_writeoffs") }
 func (m *MongoDB) Settings() *mongo.Collection         { return m.db.Collection("settings") }
@@ -287,6 +288,17 @@ func (m *MongoDB) CreateIndexes(ctx context.Context) error {
 	// Compound index on stock_adjustments: drug_id + created_at DESC
 	if _, err := m.StockAdjustments().Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "drug_id", Value: 1}, {Key: "created_at", Value: -1}},
+	}); err != nil {
+		return err
+	}
+	if _, err := m.StockCounts().Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "count_no", Value: 1}},
+		Options: options.Index().SetUnique(true),
+	}); err != nil {
+		return err
+	}
+	if _, err := m.StockCounts().Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "created_at", Value: -1}},
 	}); err != nil {
 		return err
 	}
