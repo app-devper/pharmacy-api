@@ -227,6 +227,36 @@ Authorization: Bearer <token>
 
 **Sale linkage (`sale_id`)** — ทุก KY entity (ขย.9/10/11/12) มี optional field `sale_id` (string, `omitempty`). เมื่อ KY ถูกบันทึกพร้อมการขาย (ขย.10/11/12) frontend ส่ง `sale_id` ของ Sale ที่เพิ่ง create เพื่อให้สามารถ trace ย้อนกลับได้ผ่าน `GET /sales/:id/ky`. Backend trim whitespace + เก็บเป็น `""` (omit จาก response) สำหรับ entry ที่ไม่ได้ผูกกับ sale. มี partial index บน `ky10/ky11/ky12.sale_id` (filter `$type:"string"` + `$gt:""`) — ไม่ index ค่าว่าง.
 
+### Labels
+
+| Method | Path | คำอธิบาย |
+|--------|------|-----------|
+| `POST` | `/api/pharmacy/v1/labels/print` | สร้าง PDF ฉลากบาร์โค้ดจากรายการยา (Code128) — คืน `application/pdf` |
+
+**Request body** (`models.PrintLabelsInput`):
+
+```json
+{
+  "size": "38x25",
+  "lines": [
+    {
+      "drug_name": "พาราเซตามอล 500mg",
+      "lot_number": "PCM-25011",
+      "barcode": "8851234567001",
+      "price": 2.00,
+      "include_price": true,
+      "copies": 24
+    }
+  ]
+}
+```
+
+- `size`: `"38x25"` (default, small) หรือ `"50x30"` (medium) — ขนาดฉลากแต่ละดวงในหน่วย มม.
+- ฉลากเรียงจากซ้ายไปขวา-บนลงล่าง บนกระดาษ A4 portrait (margin 5mm, gap 2mm)
+- บาร์โค้ด render เป็น Code128 จริง (boombuler/barcode → 8-bit PNG → embed gofpdf)
+- จำกัด ≤ 200 lines, ≤ 500 copies ต่อ line (กัน DoS)
+- เฉพาะ ADMIN+ (เหมือน export อื่น ๆ)
+
 ### Settings (Singleton per tenant)
 
 | Method | Path | คำอธิบาย |
@@ -282,6 +312,7 @@ Bootstrap (main.go): `000` ถูก warm-up โดย `CreateIndexesForClient("
 - `/api/pharmacy/v1/imports/*` ทั้งหมด
 - `/api/pharmacy/v1/suppliers/*` ทั้งหมด
 - `GET /api/pharmacy/v1/export/:form`
+- `POST /api/pharmacy/v1/labels/print`
 
 ### Endpoints ที่ USER เข้าถึงได้
 

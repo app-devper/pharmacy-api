@@ -29,6 +29,7 @@ func Setup(
 	reth *handlers.ReturnHandler,
 	mvh *handlers.MovementsHandler,
 	seth *handlers.SettingsHandler,
+	labh *handlers.LabelHandler,
 	secretKey string,
 	authSystem string,
 ) *chi.Mux {
@@ -129,6 +130,9 @@ func Setup(
 
 			// PDF Export
 			r.Get("/export/{form}", eh.Export)
+
+			// Label print (barcode/price labels — returns PDF)
+			r.Post("/labels/print", labh.Print)
 
 			// Settings (write)
 			r.Put("/settings", seth.Update)

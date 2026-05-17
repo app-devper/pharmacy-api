@@ -46,9 +46,10 @@ func main() {
 	reth := handlers.NewReturnHandler(manager)
 	mvh := handlers.NewMovementsHandler(manager)
 	seth := handlers.NewSettingsHandler(manager)
+	labh := handlers.NewLabelHandler()
 
 	r := routes.Setup(
-		dh, lh, ch, sh, rh, kh, eh, ih, suph, ah, sch, reth, mvh, seth,
+		dh, lh, ch, sh, rh, kh, eh, ih, suph, ah, sch, reth, mvh, seth, labh,
 		cfg.SecretKey, cfg.System,
 	)
 
