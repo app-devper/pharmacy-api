@@ -159,6 +159,7 @@ Authorization: Bearer <token>
 | `POST` | `/api/pharmacy/v1/sales` | บันทึกการขาย (FEFO deduction · รองรับ oversell) |
 | `GET` | `/api/pharmacy/v1/sales` | ประวัติการขาย |
 | `GET` | `/api/pharmacy/v1/sales/:id/items` | รายการสินค้าในใบขาย (แสดง lot_splits + oversold_qty) |
+| `GET` | `/api/pharmacy/v1/sales/:id/ky` | KY entries (ขย.10/11/12) ที่ถูกบันทึกพร้อมใบขายนี้ |
 | `POST` | `/api/pharmacy/v1/sales/:id/void` | ยกเลิกใบขาย |
 | `POST` | `/api/pharmacy/v1/sales/:id/return` | คืนสินค้า (เฉพาะส่วนที่ผูก real lot แล้ว) |
 | `GET` | `/api/pharmacy/v1/sales/:id/returns` | ประวัติการคืนสินค้า |
@@ -221,7 +222,10 @@ Authorization: Bearer <token>
 | `GET/POST` | `/api/pharmacy/v1/ky10` | แบบ ขย.10 |
 | `GET/POST` | `/api/pharmacy/v1/ky11` | แบบ ขย.11 |
 | `GET/POST` | `/api/pharmacy/v1/ky12` | แบบ ขย.12 |
+| `GET` | `/api/pharmacy/v1/sales/:id/ky` | ดึง KY entries (ขย.10/11/12) ทั้งหมดที่ผูกกับใบขาย — แยกตาม `ky10` / `ky11` / `ky12` |
 | `GET` | `/api/pharmacy/v1/export/:form` | Export PDF (ky9, ky10, ky11, ky12) |
+
+**Sale linkage (`sale_id`)** — ทุก KY entity (ขย.9/10/11/12) มี optional field `sale_id` (string, `omitempty`). เมื่อ KY ถูกบันทึกพร้อมการขาย (ขย.10/11/12) frontend ส่ง `sale_id` ของ Sale ที่เพิ่ง create เพื่อให้สามารถ trace ย้อนกลับได้ผ่าน `GET /sales/:id/ky`. Backend trim whitespace + เก็บเป็น `""` (omit จาก response) สำหรับ entry ที่ไม่ได้ผูกกับ sale. มี partial index บน `ky10/ky11/ky12.sale_id` (filter `$type:"string"` + `$gt:""`) — ไม่ index ค่าว่าง.
 
 ### Settings (Singleton per tenant)
 
@@ -283,7 +287,7 @@ Bootstrap (main.go): `000` ถูก warm-up โดย `CreateIndexesForClient("
 
 `GET /api/pharmacy/v1/drugs`, `GET /api/pharmacy/v1/drugs/low-stock`, `GET /api/pharmacy/v1/drugs/:id/lots`, `GET /api/pharmacy/v1/lots/expiring`,
 `GET|POST /api/pharmacy/v1/customers`, `GET /api/pharmacy/v1/customers/:id/sales`,
-`GET|POST /api/pharmacy/v1/sales`, `GET /api/pharmacy/v1/sales/:id/items`, `POST /api/pharmacy/v1/sales/:id/return`, `GET /api/pharmacy/v1/sales/:id/returns`,
+`GET|POST /api/pharmacy/v1/sales`, `GET /api/pharmacy/v1/sales/:id/items`, `GET /api/pharmacy/v1/sales/:id/ky`, `POST /api/pharmacy/v1/sales/:id/return`, `GET /api/pharmacy/v1/sales/:id/returns`,
 `GET /api/pharmacy/v1/report/summary`, `GET /api/pharmacy/v1/report/dashboard`, `GET /api/pharmacy/v1/report/daily`, `GET /api/pharmacy/v1/report/monthly`, `GET /api/pharmacy/v1/report/top-drugs`, `GET /api/pharmacy/v1/report/slow-drugs`,
 `GET /api/pharmacy/v1/movements`
 

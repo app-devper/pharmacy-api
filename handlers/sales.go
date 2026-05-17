@@ -182,6 +182,7 @@ func (h *SaleHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// sales share one counter and the YYMMDD prefix matches the local date.
 	tz := loadTimezone(ctx, mdb)
 	var billNo string
+	var saleID bson.ObjectID
 	if err := mdb.WithTransaction(ctx, func(txCtx context.Context) error {
 		now := time.Now().In(tz)
 		generatedBillNo, err := h.nextSaleBillNo(txCtx, mdb, now)
@@ -205,6 +206,7 @@ func (h *SaleHandler) Create(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		saleOID := res.InsertedID.(bson.ObjectID)
+		saleID = saleOID
 
 		for _, item := range preparedItems {
 			if err := h.applySaleItem(txCtx, mdb, saleOID, item); err != nil {
@@ -265,6 +267,7 @@ func (h *SaleHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonOK(w, models.SaleResponse{
+		ID:     saleID.Hex(),
 		BillNo: billNo, Discount: discount, Total: total, Change: change,
 		StockUpdates: updates,
 	})
@@ -277,6 +280,7 @@ func (h *SaleHandler) writeExistingSaleResponse(ctx context.Context, mdb *db.Mon
 		return false
 	}
 	jsonOK(w, models.SaleResponse{
+		ID:       sale.ID.Hex(),
 		BillNo:   sale.BillNo,
 		Discount: sale.Discount,
 		Total:    sale.Total,

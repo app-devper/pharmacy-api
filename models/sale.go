@@ -113,6 +113,7 @@ type StockUpdate struct {
 }
 
 type SaleResponse struct {
+	ID           string        `json:"id"`
 	BillNo       string        `json:"bill_no"`
 	Discount     float64       `json:"discount"`
 	Total        float64       `json:"total"`

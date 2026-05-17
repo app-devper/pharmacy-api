@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"regexp"
+	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
@@ -24,6 +26,75 @@ func kyFilter(month string) bson.M {
 		return bson.M{}
 	}
 	return bson.M{"date": bson.M{"$regex": "^" + regexp.QuoteMeta(month)}}
+}
+
+func buildKy9Payload(in models.Ky9Input, now time.Time) models.Ky9 {
+	return models.Ky9{
+		SaleID:       strings.TrimSpace(in.SaleID),
+		Date:         in.Date,
+		DrugName:     in.DrugName,
+		RegNo:        in.RegNo,
+		Unit:         in.Unit,
+		Qty:          in.Qty,
+		PricePerUnit: in.PricePerUnit,
+		TotalValue:   in.PricePerUnit * float64(in.Qty),
+		Seller:       in.Seller,
+		InvoiceNo:    in.InvoiceNo,
+		CreatedAt:    now,
+	}
+}
+
+func buildKy10Payload(in models.Ky10Input, now time.Time) models.Ky10 {
+	return models.Ky10{
+		SaleID:       strings.TrimSpace(in.SaleID),
+		Date:         in.Date,
+		DrugName:     in.DrugName,
+		RegNo:        in.RegNo,
+		Qty:          in.Qty,
+		Unit:         in.Unit,
+		BuyerName:    in.BuyerName,
+		BuyerAddress: in.BuyerAddress,
+		RxNo:         in.RxNo,
+		Doctor:       in.Doctor,
+		Balance:      in.Balance,
+		CreatedAt:    now,
+	}
+}
+
+func buildKy11Payload(in models.Ky11Input, now time.Time) models.Ky11 {
+	return models.Ky11{
+		SaleID:     strings.TrimSpace(in.SaleID),
+		Date:       in.Date,
+		DrugName:   in.DrugName,
+		RegNo:      in.RegNo,
+		Qty:        in.Qty,
+		Unit:       in.Unit,
+		BuyerName:  in.BuyerName,
+		Purpose:    in.Purpose,
+		Pharmacist: in.Pharmacist,
+		CreatedAt:  now,
+	}
+}
+
+func buildKy12Payload(in models.Ky12Input, now time.Time) models.Ky12 {
+	status := in.Status
+	if status == "" {
+		status = "จ่ายแล้ว"
+	}
+	return models.Ky12{
+		SaleID:      strings.TrimSpace(in.SaleID),
+		Date:        in.Date,
+		RxNo:        in.RxNo,
+		PatientName: in.PatientName,
+		Doctor:      in.Doctor,
+		Hospital:    in.Hospital,
+		DrugName:    in.DrugName,
+		Qty:         in.Qty,
+		Unit:        in.Unit,
+		TotalValue:  in.TotalValue,
+		Status:      status,
+		CreatedAt:   now,
+	}
 }
 
 func (h *KyHandler) ListKy9(w http.ResponseWriter, r *http.Request) {
@@ -65,12 +136,7 @@ func (h *KyHandler) AddKy9(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	doc := models.Ky9{
-		Date: input.Date, DrugName: input.DrugName, RegNo: input.RegNo,
-		Unit: input.Unit, Qty: input.Qty, PricePerUnit: input.PricePerUnit,
-		TotalValue: input.PricePerUnit * float64(input.Qty),
-		Seller:     input.Seller, InvoiceNo: input.InvoiceNo, CreatedAt: time.Now(),
-	}
+	doc := buildKy9Payload(input, time.Now())
 	res, err := mdb.Ky9().InsertOne(ctx, doc)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
@@ -118,12 +184,7 @@ func (h *KyHandler) AddKy10(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	doc := models.Ky10{
-		Date: input.Date, DrugName: input.DrugName, RegNo: input.RegNo,
-		Qty: input.Qty, Unit: input.Unit, BuyerName: input.BuyerName,
-		BuyerAddress: input.BuyerAddress, RxNo: input.RxNo, Doctor: input.Doctor,
-		Balance: input.Balance, CreatedAt: time.Now(),
-	}
+	doc := buildKy10Payload(input, time.Now())
 	res, err := mdb.Ky10().InsertOne(ctx, doc)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
@@ -171,11 +232,7 @@ func (h *KyHandler) AddKy11(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	doc := models.Ky11{
-		Date: input.Date, DrugName: input.DrugName, RegNo: input.RegNo,
-		Qty: input.Qty, Unit: input.Unit, BuyerName: input.BuyerName,
-		Purpose: input.Purpose, Pharmacist: input.Pharmacist, CreatedAt: time.Now(),
-	}
+	doc := buildKy11Payload(input, time.Now())
 	res, err := mdb.Ky11().InsertOne(ctx, doc)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
@@ -216,8 +273,27 @@ func (h *KyHandler) AddKy12(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	if input.Status == "" {
-		input.Status = "จ่ายแล้ว"
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	doc := buildKy12Payload(input, time.Now())
+	res, err := mdb.Ky12().InsertOne(ctx, doc)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, map[string]string{"id": res.InsertedID.(bson.ObjectID).Hex()})
+}
+
+func (h *KyHandler) BySale(w http.ResponseWriter, r *http.Request) {
+	saleID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if saleID == "" {
+		jsonError(w, "sale id is required", http.StatusBadRequest)
+		return
 	}
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
@@ -226,16 +302,56 @@ func (h *KyHandler) AddKy12(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	doc := models.Ky12{
-		Date: input.Date, RxNo: input.RxNo, PatientName: input.PatientName,
-		Doctor: input.Doctor, Hospital: input.Hospital, DrugName: input.DrugName,
-		Qty: input.Qty, Unit: input.Unit, TotalValue: input.TotalValue,
-		Status: input.Status, CreatedAt: time.Now(),
+	filter := bson.M{"sale_id": saleID}
+	sort := options.Find().SetSort(bson.D{{Key: "created_at", Value: 1}})
+
+	out := models.SaleKyLinkage{
+		Ky10: []models.Ky10{},
+		Ky11: []models.Ky11{},
+		Ky12: []models.Ky12{},
 	}
-	res, err := mdb.Ky12().InsertOne(ctx, doc)
-	if err != nil {
+
+	if cur, err := mdb.Ky10().Find(ctx, filter, sort); err == nil {
+		defer cur.Close(ctx)
+		if err := cur.All(ctx, &out.Ky10); err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	} else {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	jsonOK(w, map[string]string{"id": res.InsertedID.(bson.ObjectID).Hex()})
+
+	if cur, err := mdb.Ky11().Find(ctx, filter, sort); err == nil {
+		defer cur.Close(ctx)
+		if err := cur.All(ctx, &out.Ky11); err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if cur, err := mdb.Ky12().Find(ctx, filter, sort); err == nil {
+		defer cur.Close(ctx)
+		if err := cur.All(ctx, &out.Ky12); err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if out.Ky10 == nil {
+		out.Ky10 = []models.Ky10{}
+	}
+	if out.Ky11 == nil {
+		out.Ky11 = []models.Ky11{}
+	}
+	if out.Ky12 == nil {
+		out.Ky12 = []models.Ky12{}
+	}
+	jsonOK(w, out)
 }

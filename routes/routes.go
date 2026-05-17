@@ -57,6 +57,7 @@ func Setup(
 			r.Get("/sales", sh.List)
 			r.Post("/sales", sh.Create)
 			r.Get("/sales/{id}/items", sh.Items)
+			r.Get("/sales/{id}/ky", kh.BySale)
 			r.Post("/sales/{id}/return", reth.Create)
 			r.Get("/sales/{id}/returns", reth.List)
 

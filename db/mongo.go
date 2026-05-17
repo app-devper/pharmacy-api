@@ -250,6 +250,19 @@ func (m *MongoDB) CreateIndexes(ctx context.Context) error {
 			return err
 		}
 	}
+	// Partial index on ky10/11/12.sale_id — supports GET /sales/{id}/ky
+	// and is filtered to non-empty values so legacy rows without sale_id
+	// stay out of the index entirely.
+	for _, col := range []*mongo.Collection{m.Ky10(), m.Ky11(), m.Ky12()} {
+		if _, err := col.Indexes().CreateOne(ctx, mongo.IndexModel{
+			Keys: bson.D{{Key: "sale_id", Value: 1}},
+			Options: options.Index().SetPartialFilterExpression(
+				bson.M{"sale_id": bson.M{"$type": "string", "$gt": ""}},
+			),
+		}); err != nil {
+			return err
+		}
+	}
 	// Indexes on drug_lots
 	if _, err := m.DrugLots().Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "drug_id", Value: 1}},
