@@ -69,12 +69,19 @@ backend/
 MONGO_URI=mongodb://localhost:27017
 DB_NAME=pharmacy
 PORT=8087
-FRONTEND_ORIGIN=http://localhost:5173
+FRONTEND_ORIGIN=http://localhost:5173,https://dpharm.web.app
 SECRET_KEY=your_jwt_secret_key
+SYSTEM=PHARMACY
 UM_API_URL=http://localhost:8585
 ```
 
 > **SECRET_KEY** ต้องตรงกับค่าที่ใช้ใน Um-Api เพื่อ verify JWT token
+>
+> **FRONTEND_ORIGIN** — comma-separated origin allowlist for CORS. When set, the
+> server reflects `Origin` only when it matches one of the entries. **Leave
+> unset only for local development** — empty value falls back to
+> `Access-Control-Allow-Origin: *`, which is fine on localhost but should
+> never ship to production.
 
 ### รัน
 

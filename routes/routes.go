@@ -32,11 +32,12 @@ func Setup(
 	labh *handlers.LabelHandler,
 	secretKey string,
 	authSystem string,
+	allowedOrigins []string,
 ) *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
-	r.Use(mw.CORS())
+	r.Use(mw.CORS(allowedOrigins))
 
 	r.Route("/api/pharmacy/v1", func(r chi.Router) {
 		r.Use(mw.RequireAuth(secretKey, authSystem))
