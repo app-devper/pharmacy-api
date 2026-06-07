@@ -72,10 +72,10 @@ Keep this repository layout flat. Do not introduce a nested `app/features/...` a
 - Configuration is loaded through `config/config.go`; trust code over docs when they differ.
 - Required on startup: `SECRET_KEY`, `SYSTEM`.
 - Defaults exist for `MONGO_URI`, `DB_PREFIX`, and `PORT`.
-- `DB_NAME`, `FRONTEND_ORIGIN`, and `UM_API_URL` are not used by current backend logic.
+- `DB_NAME` and `UM_API_URL` are not used by current backend logic.
+- `FRONTEND_ORIGIN` is the CORS origin allowlist (comma-separated). When set, the server reflects `Origin` only on match; when unset, it falls back to `Access-Control-Allow-Origin: *` for local-dev convenience. Wire production deployments through this variable so the API isn't callable from arbitrary origins.
 - Do not commit new secrets or depend on local `.env` values as source of truth.
 - Local `.env` may exist for convenience, but code changes should rely on `config.Load` behavior.
-- CORS behavior currently lives in middleware code, not in environment configuration.
 
 ## API And Handler Conventions
 - Keep handlers focused on HTTP parsing, validation, orchestration, and response writing.

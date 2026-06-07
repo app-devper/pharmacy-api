@@ -10,6 +10,7 @@ import (
 	"pharmacy-pos/backend/config"
 	"pharmacy-pos/backend/db"
 	"pharmacy-pos/backend/handlers"
+	mw "pharmacy-pos/backend/middleware"
 	"pharmacy-pos/backend/routes"
 )
 
@@ -51,6 +52,7 @@ func main() {
 	r := routes.Setup(
 		dh, lh, ch, sh, rh, kh, eh, ih, suph, ah, sch, reth, mvh, seth, labh,
 		cfg.SecretKey, cfg.System,
+		mw.ParseAllowedOrigins(cfg.FrontendOrigin),
 	)
 
 	addr := fmt.Sprintf(":%s", cfg.Port)
