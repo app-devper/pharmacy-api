@@ -21,6 +21,113 @@ type KyHandler struct{ dbm *db.Manager }
 
 func NewKyHandler(d *db.Manager) *KyHandler { return &KyHandler{dbm: d} }
 
+// errBadRequest is a sentinel-style typed error so handlers can map a
+// validateKyXInput failure to a 400 response without string-parsing.
+type errBadRequest string
+
+func (e errBadRequest) Error() string { return string(e) }
+
+// validateKy9Input rejects KY9 (controlled-drug purchase) submissions that
+// would corrupt the regulator's audit trail: missing date / drug, non-positive
+// qty, or negative price. KY records cannot be silently re-edited later, so
+// the input must be sane on first write.
+func validateKy9Input(in models.Ky9Input) error {
+	if strings.TrimSpace(in.Date) == "" {
+		return errBadRequest("date is required")
+	}
+	if strings.TrimSpace(in.DrugName) == "" {
+		return errBadRequest("drug_name is required")
+	}
+	if in.Qty <= 0 {
+		return errBadRequest("qty must be > 0")
+	}
+	if in.PricePerUnit < 0 {
+		return errBadRequest("price_per_unit must be >= 0")
+	}
+	return nil
+}
+
+// validateKy10Input rejects KY10 (controlled-drug sale) submissions missing
+// the regulator-mandated buyer fields or with non-positive qty / negative
+// balance. The KMP frontend already validates these, but the backend mirrors
+// the check so any client (curl, future flutter app, retry from a malformed
+// queue) can't bypass it.
+func validateKy10Input(in models.Ky10Input) error {
+	if strings.TrimSpace(in.Date) == "" {
+		return errBadRequest("date is required")
+	}
+	if strings.TrimSpace(in.DrugName) == "" {
+		return errBadRequest("drug_name is required")
+	}
+	if in.Qty <= 0 {
+		return errBadRequest("qty must be > 0")
+	}
+	if strings.TrimSpace(in.BuyerName) == "" {
+		return errBadRequest("buyer_name is required")
+	}
+	if strings.TrimSpace(in.BuyerAddress) == "" {
+		return errBadRequest("buyer_address is required")
+	}
+	if in.Balance < 0 {
+		return errBadRequest("balance must be >= 0")
+	}
+	return nil
+}
+
+// validateKy11Input rejects KY11 (dangerous-drug sale) submissions missing
+// the regulator-mandated buyer / purpose / pharmacist fields.
+func validateKy11Input(in models.Ky11Input) error {
+	if strings.TrimSpace(in.Date) == "" {
+		return errBadRequest("date is required")
+	}
+	if strings.TrimSpace(in.DrugName) == "" {
+		return errBadRequest("drug_name is required")
+	}
+	if in.Qty <= 0 {
+		return errBadRequest("qty must be > 0")
+	}
+	if strings.TrimSpace(in.BuyerName) == "" {
+		return errBadRequest("buyer_name is required")
+	}
+	if strings.TrimSpace(in.Purpose) == "" {
+		return errBadRequest("purpose is required")
+	}
+	if strings.TrimSpace(in.Pharmacist) == "" {
+		return errBadRequest("pharmacist is required")
+	}
+	return nil
+}
+
+// validateKy12Input rejects KY12 (prescription-drug sale) submissions missing
+// the rx_no / patient / doctor fields the regulator requires, or with a
+// negative total_value. total_value is client-supplied (the line-level value
+// already accounts for unit conversion + tier pricing on the cashier side);
+// the backend can only sanity-check the sign.
+func validateKy12Input(in models.Ky12Input) error {
+	if strings.TrimSpace(in.Date) == "" {
+		return errBadRequest("date is required")
+	}
+	if strings.TrimSpace(in.DrugName) == "" {
+		return errBadRequest("drug_name is required")
+	}
+	if in.Qty <= 0 {
+		return errBadRequest("qty must be > 0")
+	}
+	if strings.TrimSpace(in.RxNo) == "" {
+		return errBadRequest("rx_no is required")
+	}
+	if strings.TrimSpace(in.PatientName) == "" {
+		return errBadRequest("patient_name is required")
+	}
+	if strings.TrimSpace(in.Doctor) == "" {
+		return errBadRequest("doctor is required")
+	}
+	if in.TotalValue < 0 {
+		return errBadRequest("total_value must be >= 0")
+	}
+	return nil
+}
+
 func kyFilter(month string) bson.M {
 	if month == "" {
 		return bson.M{}
@@ -129,6 +236,10 @@ func (h *KyHandler) AddKy9(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid body", http.StatusBadRequest)
 		return
 	}
+	if err := validateKy9Input(input); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
 		jsonError(w, "unauthorized client", http.StatusForbidden)
@@ -175,6 +286,10 @@ func (h *KyHandler) AddKy10(w http.ResponseWriter, r *http.Request) {
 	var input models.Ky10Input
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		jsonError(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	if err := validateKy10Input(input); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
@@ -225,6 +340,10 @@ func (h *KyHandler) AddKy11(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid body", http.StatusBadRequest)
 		return
 	}
+	if err := validateKy11Input(input); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
 		jsonError(w, "unauthorized client", http.StatusForbidden)
@@ -271,6 +390,10 @@ func (h *KyHandler) AddKy12(w http.ResponseWriter, r *http.Request) {
 	var input models.Ky12Input
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		jsonError(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	if err := validateKy12Input(input); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
