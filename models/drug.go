@@ -31,11 +31,11 @@ type AltUnit struct {
 	Factor    int        `bson:"factor"            json:"factor"`     // must be >= 2
 	SellPrice float64    `bson:"sell_price"        json:"sell_price"` // = Prices.Retail (back-compat shim)
 	Prices    PriceTiers `bson:"prices,omitempty"  json:"prices"`
-	Barcode   string     `bson:"barcode,omitempty" json:"barcode"`    // optional; scanner lookup
+	Barcode   string     `bson:"barcode,omitempty" json:"barcode"` // optional; scanner lookup
 	// Hidden hides this alt unit from the sell-page picker. The base unit
 	// is always available — hiding an alt unit only prevents cashiers from
 	// picking it while leaving historical sales intact. Default false = visible.
-	Hidden    bool       `bson:"hidden,omitempty"  json:"hidden"`
+	Hidden bool `bson:"hidden,omitempty"  json:"hidden"`
 }
 
 // LotSummary is a lightweight pointer to the lot that FEFO will deduct from
@@ -58,19 +58,19 @@ type Drug struct {
 	Barcode     string        `bson:"barcode"        json:"barcode"`
 	// bson tag stays "price" for backward compat with existing MongoDB docs.
 	// JSON tag is "sell_price" so the frontend receives the new name.
-	SellPrice   float64   `bson:"price"          json:"sell_price"`
-	CostPrice   float64   `bson:"cost_price"     json:"cost_price"`
-	Stock       int       `bson:"stock"          json:"stock"`
-	MinStock    int       `bson:"min_stock"      json:"min_stock"`
-	RegNo       string    `bson:"reg_no"         json:"reg_no"`
-	Unit        string    `bson:"unit"           json:"unit"`
+	SellPrice   float64    `bson:"price"          json:"sell_price"`
+	CostPrice   float64    `bson:"cost_price"     json:"cost_price"`
+	Stock       int        `bson:"stock"          json:"stock"`
+	MinStock    int        `bson:"min_stock"      json:"min_stock"`
+	RegNo       string     `bson:"reg_no"         json:"reg_no"`
+	Unit        string     `bson:"unit"           json:"unit"`
 	ReportTypes []string   `bson:"report_types"   json:"report_types"`
 	AltUnits    []AltUnit  `bson:"alt_units,omitempty" json:"alt_units"`
 	Prices      PriceTiers `bson:"prices,omitempty"    json:"prices"`
 	// Next-FEFO lot — populated on list responses only, not stored. May be
 	// nil when the drug has no lots (e.g. stock-only legacy data).
-	NextLot     *LotSummary `bson:"-" json:"next_lot,omitempty"`
-	CreatedAt   time.Time   `bson:"created_at"     json:"created_at"`
+	NextLot   *LotSummary `bson:"-" json:"next_lot,omitempty"`
+	CreatedAt time.Time   `bson:"created_at"     json:"created_at"`
 }
 
 type DrugInput struct {
@@ -99,25 +99,25 @@ type ReorderSuggestion struct {
 	Unit         string  `json:"unit"`
 	CurrentStock int     `json:"current_stock"`
 	MinStock     int     `json:"min_stock"`
-	QtySold      int     `json:"qty_sold"`       // total sold over period
+	QtySold      int     `json:"qty_sold"` // total sold over period
 	AvgDailySale float64 `json:"avg_daily_sale"`
-	DaysLeft     float64 `json:"days_left"`      // 9999 = no sales / infinite
+	DaysLeft     float64 `json:"days_left"` // 9999 = no sales / infinite
 	SuggestedQty int     `json:"suggested_qty"`
 	CostPrice    float64 `json:"cost_price"`
 	SellPrice    float64 `json:"sell_price"`
 }
 
 type DrugUpdate struct {
-	Name        string    `json:"name"`
-	GenericName string    `json:"generic_name"`
-	Type        string    `json:"type"`
-	Strength    string    `json:"strength"`
-	Barcode     string    `json:"barcode"`
-	SellPrice   float64   `json:"sell_price"`
-	CostPrice   float64   `json:"cost_price"`
-	MinStock    int       `json:"min_stock"`
-	RegNo       string    `json:"reg_no"`
-	Unit        string    `json:"unit"`
+	Name        string     `json:"name"`
+	GenericName string     `json:"generic_name"`
+	Type        string     `json:"type"`
+	Strength    string     `json:"strength"`
+	Barcode     string     `json:"barcode"`
+	SellPrice   float64    `json:"sell_price"`
+	CostPrice   float64    `json:"cost_price"`
+	MinStock    int        `json:"min_stock"`
+	RegNo       string     `json:"reg_no"`
+	Unit        string     `json:"unit"`
 	ReportTypes []string   `json:"report_types"`
 	AltUnits    []AltUnit  `json:"alt_units"`
 	Prices      PriceTiers `json:"prices"`

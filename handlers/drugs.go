@@ -142,7 +142,7 @@ func isValidPriceTier(t string) bool {
 	return true
 }
 
-func buildDrugCreatePayload(input models.DrugInput, now time.Time) (models.Drug, *models.DrugLot, error) {
+func buildDrugCreatePayload(input models.DrugInput, now time.Time, loc *time.Location) (models.Drug, *models.DrugLot, error) {
 	if input.Name == "" {
 		return models.Drug{}, nil, errors.New("name is required")
 	}
@@ -195,18 +195,17 @@ func buildDrugCreatePayload(input models.DrugInput, now time.Time) (models.Drug,
 			return models.Drug{}, nil, errors.New("create_lot.expiry_date is required")
 		}
 
-		expiry, err := time.ParseInLocation("2006-01-02", input.CreateLot.ExpiryDate, time.Local)
+		expiry, err := time.ParseInLocation("2006-01-02", input.CreateLot.ExpiryDate, loc)
 		if err != nil {
 			return models.Drug{}, nil, errors.New("create_lot.expiry_date must be YYYY-MM-DD")
 		}
-		// Expiry must be strictly after today (midnight-local).
-		today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
+		today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 		if !expiry.After(today) {
 			return models.Drug{}, nil, errors.New("create_lot.expiry_date must be in the future")
 		}
 		importDate := now
 		if input.CreateLot.ImportDate != "" {
-			parsed, err := time.ParseInLocation("2006-01-02", input.CreateLot.ImportDate, time.Local)
+			parsed, err := time.ParseInLocation("2006-01-02", input.CreateLot.ImportDate, loc)
 			if err != nil {
 				return models.Drug{}, nil, errors.New("create_lot.import_date must be YYYY-MM-DD")
 			}
@@ -351,7 +350,8 @@ func (h *DrugHandler) Add(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	drug, createLot, err := buildDrugCreatePayload(input, time.Now())
+	tz := loadTimezone(ctx, mdb)
+	drug, createLot, err := buildDrugCreatePayload(input, time.Now().In(tz), tz)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusBadRequest)
 		return

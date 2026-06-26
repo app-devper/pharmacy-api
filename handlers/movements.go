@@ -42,12 +42,12 @@ func (h *MovementsHandler) List(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "unauthorized client", http.StatusForbidden)
 		return
 	}
-	q := r.URL.Query()
-	tz := loadTimezone(r.Context(), d)
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
 
-	// --- date range ---
-	// Default window (last 30 days → tomorrow) anchored on Bangkok-local "now"
-	// so early-morning requests don't trim yesterday from the view.
+	q := r.URL.Query()
+	tz := loadTimezone(ctx, d)
+
 	now := time.Now().In(tz)
 	from := now.AddDate(0, 0, -30)
 	to := now.Add(24 * time.Hour)
@@ -62,7 +62,6 @@ func (h *MovementsHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// --- type filter ---
 	typeSet := map[string]bool{
 		"import": true, "sale": true, "return": true,
 		"adjustment": true, "writeoff": true,
@@ -76,10 +75,8 @@ func (h *MovementsHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// --- drug_name filter (regex) ---
 	drugName := strings.TrimSpace(q.Get("drug_name"))
 
-	// --- pagination ---
 	limit := 50
 	offset := 0
 	if s := q.Get("limit"); s != "" {
@@ -92,9 +89,6 @@ func (h *MovementsHandler) List(w http.ResponseWriter, r *http.Request) {
 			offset = n
 		}
 	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-	defer cancel()
 
 	var mu sync.Mutex
 	var all []MovementEntry

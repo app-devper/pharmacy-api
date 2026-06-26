@@ -37,6 +37,7 @@ func Setup(
 	r := chi.NewRouter()
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
+	r.Use(chimiddleware.RequestSize(5 * 1024 * 1024))
 	r.Use(mw.CORS(allowedOrigins))
 
 	r.Route("/api/pharmacy/v1", func(r chi.Router) {

@@ -10,13 +10,13 @@ import (
 // configuration shared across the UI — store info + receipt layout.
 // The handler upserts by a fixed key "singleton" so there is always at most one row.
 type Settings struct {
-	ID         bson.ObjectID      `bson:"_id,omitempty" json:"-"`
-	Key        string             `bson:"key"           json:"-"` // always "singleton"
-	Store      StoreInfo          `bson:"store"         json:"store"`
-	Receipt    ReceiptSettings    `bson:"receipt"       json:"receipt"`
-	Stock      StockSettings      `bson:"stock"         json:"stock"`
-	Pharmacist PharmacistInfo     `bson:"pharmacist"    json:"pharmacist"`
-	KY         KYSettings         `bson:"ky"            json:"ky"`
+	ID         bson.ObjectID   `bson:"_id,omitempty" json:"-"`
+	Key        string          `bson:"key"           json:"-"` // always "singleton"
+	Store      StoreInfo       `bson:"store"         json:"store"`
+	Receipt    ReceiptSettings `bson:"receipt"       json:"receipt"`
+	Stock      StockSettings   `bson:"stock"         json:"stock"`
+	Pharmacist PharmacistInfo  `bson:"pharmacist"    json:"pharmacist"`
+	KY         KYSettings      `bson:"ky"            json:"ky"`
 	// Timezone — IANA name (e.g. "Asia/Bangkok"). Controls how "today" /
 	// "this month" are computed for reports and day-bucketed filters. Empty →
 	// falls back to DefaultTimezone.
@@ -32,9 +32,9 @@ type StoreInfo struct {
 }
 
 type ReceiptSettings struct {
-	Header         string `bson:"header"          json:"header"`           // tagline above items
-	Footer         string `bson:"footer"          json:"footer"`           // thank-you message
-	PaperWidth     string `bson:"paper_width"     json:"paper_width"`      // "58" | "80"
+	Header         string `bson:"header"          json:"header"`          // tagline above items
+	Footer         string `bson:"footer"          json:"footer"`          // thank-you message
+	PaperWidth     string `bson:"paper_width"     json:"paper_width"`     // "58" | "80"
 	ShowPharmacist bool   `bson:"show_pharmacist" json:"show_pharmacist"` // pulls name from Settings.Pharmacist
 }
 

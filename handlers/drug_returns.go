@@ -70,12 +70,12 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	defer itemCur.Close(ctx)
 	var saleItems []models.SaleItem
 	if err := itemCur.All(ctx, &saleItems); err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	itemCur.Close(ctx)
 
 	saleItemMap := make(map[string]models.SaleItem, len(saleItems))
 	for _, si := range saleItems {
@@ -87,12 +87,12 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "failed to load existing returns: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	defer retCur.Close(ctx)
 	var existingReturns []models.DrugReturn
 	if err := retCur.All(ctx, &existingReturns); err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	retCur.Close(ctx)
 
 	alreadyReturned := make(map[string]int)
 	for _, ret := range existingReturns {
