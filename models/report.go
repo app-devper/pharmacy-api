@@ -32,7 +32,7 @@ type SlowDrug struct {
 
 // MonthlyData — revenue vs cost for a single calendar month
 type MonthlyData struct {
-	Month   string  `bson:"month"   json:"month"`   // "YYYY-MM"
+	Month   string  `bson:"month"   json:"month"` // "YYYY-MM"
 	Revenue float64 `bson:"revenue" json:"revenue"`
 	Cost    float64 `bson:"cost"    json:"cost"`
 	Profit  float64 `bson:"profit"  json:"profit"`
@@ -48,7 +48,7 @@ type Dashboard struct {
 
 // EodReport — End-of-Day cash reconciliation summary
 type EodReport struct {
-	Date          string  `json:"date"`           // YYYY-MM-DD
+	Date          string  `json:"date"` // YYYY-MM-DD
 	BillCount     int     `json:"bill_count"`
 	TotalSales    float64 `json:"total_sales"`    // sum of sale.total (after discount)
 	TotalDiscount float64 `json:"total_discount"` // sum of sale.discount

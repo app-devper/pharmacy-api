@@ -21,9 +21,16 @@ type ExportHandler struct{ dbm *db.Manager }
 
 func NewExportHandler(d *db.Manager) *ExportHandler { return &ExportHandler{dbm: d} }
 
+var monthPattern = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}$`)
+
 func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 	form := chi.URLParam(r, "form")
 	month := r.URL.Query().Get("month")
+
+	if month != "" && !monthPattern.MatchString(month) {
+		jsonError(w, "month must be YYYY-MM", http.StatusBadRequest)
+		return
+	}
 
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
@@ -40,8 +47,6 @@ func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 	sortOpt := options.Find().SetSort(bson.D{{Key: "date", Value: 1}})
 
 	filename := fmt.Sprintf("%s-%s.pdf", form, month)
-
-	var buf interface{ Bytes() []byte }
 
 	switch form {
 	case "ky9":
@@ -61,7 +66,7 @@ func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/pdf")
-		w.Header().Set("Content-Disposition", "attachment; filename="+filename)
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
 		w.Write(b.Bytes())
 		return
 
@@ -82,7 +87,7 @@ func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/pdf")
-		w.Header().Set("Content-Disposition", "attachment; filename="+filename)
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
 		w.Write(b.Bytes())
 		return
 
@@ -103,7 +108,7 @@ func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/pdf")
-		w.Header().Set("Content-Disposition", "attachment; filename="+filename)
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
 		w.Write(b.Bytes())
 		return
 
@@ -124,13 +129,11 @@ func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/pdf")
-		w.Header().Set("Content-Disposition", "attachment; filename="+filename)
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
 		w.Write(b.Bytes())
 		return
 
 	default:
-		_ = buf
-		_ = err
 		jsonError(w, "unknown form: "+form, http.StatusBadRequest)
 	}
 }

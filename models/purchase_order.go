@@ -10,7 +10,7 @@ import (
 // Converted to POItem in the handler.
 type POItemInput struct {
 	DrugID     string   `json:"drug_id"`
-	DrugName   string   `json:"drug_name"`   // auto-filled if empty
+	DrugName   string   `json:"drug_name"` // auto-filled if empty
 	LotNumber  string   `json:"lot_number"`
 	ExpiryDate string   `json:"expiry_date"` // "YYYY-MM-DD"
 	Qty        int      `json:"qty"`
@@ -46,9 +46,9 @@ type PurchaseOrder struct {
 	InvoiceNo   string        `bson:"invoice_no"     json:"invoice_no"`
 	ReceiveDate time.Time     `bson:"receive_date"   json:"receive_date"`
 	Items       []POItem      `bson:"items"          json:"items"`
-	ItemCount   int           `bson:"item_count"     json:"item_count"`   // denormalized
-	TotalCost   float64       `bson:"total_cost"     json:"total_cost"`   // sum(qty*cost_price)
-	Status      string        `bson:"status"         json:"status"`       // "draft" | "confirmed"
+	ItemCount   int           `bson:"item_count"     json:"item_count"` // denormalized
+	TotalCost   float64       `bson:"total_cost"     json:"total_cost"` // sum(qty*cost_price)
+	Status      string        `bson:"status"         json:"status"`     // "draft" | "confirmed"
 	Notes       string        `bson:"notes"          json:"notes"`
 	CreatedAt   time.Time     `bson:"created_at"     json:"created_at"`
 	ConfirmedAt *time.Time    `bson:"confirmed_at"   json:"confirmed_at"`

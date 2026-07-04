@@ -14,7 +14,7 @@ func TestBuildDrugCreatePayloadWithoutLotRejectsPositiveStock(t *testing.T) {
 		Stock:     12,
 		SellPrice: 20,
 		CostPrice: 10,
-	}, now)
+	}, now, time.Local)
 	if err == nil || err.Error() != "create_lot is required when stock > 0" {
 		t.Fatalf("expected create_lot validation error, got %v", err)
 	}
@@ -37,7 +37,7 @@ func TestBuildDrugCreatePayloadWithLotSetsStockFromLot(t *testing.T) {
 			CostPrice:  &cost,
 			SellPrice:  &sell,
 		},
-	}, now)
+	}, now, time.Local)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -71,7 +71,7 @@ func TestBuildDrugCreatePayloadWithLotAllowsMatchingStock(t *testing.T) {
 			ExpiryDate: "2027-01-01",
 			Quantity:   10,
 		},
-	}, now)
+	}, now, time.Local)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -93,7 +93,7 @@ func TestBuildDrugCreatePayloadWithLotRejectsMismatchedStock(t *testing.T) {
 			ExpiryDate: "2027-01-01",
 			Quantity:   10,
 		},
-	}, now)
+	}, now, time.Local)
 	if err == nil {
 		t.Fatal("expected error for mismatched stock")
 	}
@@ -112,7 +112,7 @@ func TestBuildDrugCreatePayloadWithLotRejectsBadDates(t *testing.T) {
 			ExpiryDate: "bad-date",
 			Quantity:   10,
 		},
-	}, now)
+	}, now, time.Local)
 	if err == nil || err.Error() != "create_lot.expiry_date must be YYYY-MM-DD" {
 		t.Fatalf("expected expiry validation error, got %v", err)
 	}
@@ -125,7 +125,7 @@ func TestBuildDrugCreatePayloadWithLotRejectsBadDates(t *testing.T) {
 			ImportDate: "bad-date",
 			Quantity:   10,
 		},
-	}, now)
+	}, now, time.Local)
 	if err == nil || err.Error() != "create_lot.import_date must be YYYY-MM-DD" {
 		t.Fatalf("expected import-date validation error, got %v", err)
 	}

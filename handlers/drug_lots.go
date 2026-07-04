@@ -87,21 +87,15 @@ func (h *DrugLotHandler) AddLot(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "expiry_date is required", http.StatusBadRequest)
 		return
 	}
-
-	expiry, err := time.ParseInLocation("2006-01-02", input.ExpiryDate, time.Local)
-	if err != nil {
+	if _, err := time.Parse("2006-01-02", input.ExpiryDate); err != nil {
 		jsonError(w, "expiry_date must be YYYY-MM-DD", http.StatusBadRequest)
 		return
 	}
-
-	importDate := time.Now()
 	if input.ImportDate != "" {
-		parsed, err := time.ParseInLocation("2006-01-02", input.ImportDate, time.Local)
-		if err != nil {
+		if _, err := time.Parse("2006-01-02", input.ImportDate); err != nil {
 			jsonError(w, "import_date must be YYYY-MM-DD", http.StatusBadRequest)
 			return
 		}
-		importDate = parsed
 	}
 
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
@@ -111,6 +105,14 @@ func (h *DrugLotHandler) AddLot(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
+
+	tz := loadTimezone(ctx, mdb)
+	expiry, _ := time.ParseInLocation("2006-01-02", input.ExpiryDate, tz)
+
+	importDate := time.Now()
+	if input.ImportDate != "" {
+		importDate, _ = time.ParseInLocation("2006-01-02", input.ImportDate, tz)
+	}
 
 	var drug models.Drug
 	if err := mdb.Drugs().FindOne(ctx, bson.M{"_id": drugOID}).Decode(&drug); err != nil {
