@@ -15,6 +15,7 @@ type Config struct {
 	System         string
 	FrontendOrigin string
 	UMApiURL       string
+	GatewayHosts   string
 }
 
 func Load() (*Config, error) {
@@ -27,6 +28,7 @@ func Load() (*Config, error) {
 		System:         os.Getenv("SYSTEM"),
 		FrontendOrigin: os.Getenv("FRONTEND_ORIGIN"),
 		UMApiURL:       os.Getenv("UM_API_URL"),
+		GatewayHosts:   os.Getenv("GATEWAY_HOSTS"),
 	}
 	if cfg.MongoURI == "" {
 		return nil, fmt.Errorf("MONGO_URI is required")
