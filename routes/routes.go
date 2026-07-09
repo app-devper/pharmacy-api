@@ -33,11 +33,13 @@ func Setup(
 	secretKey string,
 	authSystem string,
 	allowedOrigins []string,
+	gatewayHosts string,
 ) *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
 	r.Use(chimiddleware.RequestSize(5 * 1024 * 1024))
+	r.Use(mw.RequireGatewayHost(gatewayHosts))
 	r.Use(mw.CORS(allowedOrigins))
 
 	r.Route("/api/pharmacy/v1", func(r chi.Router) {
