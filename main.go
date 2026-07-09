@@ -53,6 +53,7 @@ func main() {
 		dh, lh, ch, sh, rh, kh, eh, ih, suph, ah, sch, reth, mvh, seth, labh,
 		cfg.SecretKey, cfg.System,
 		mw.ParseAllowedOrigins(cfg.FrontendOrigin),
+		cfg.GatewayHosts,
 	)
 
 	addr := fmt.Sprintf(":%s", cfg.Port)
