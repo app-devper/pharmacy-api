@@ -191,15 +191,16 @@ func (h *SaleHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 
 		sale := models.Sale{
-			BillNo:          generatedBillNo,
-			ClientRequestID: input.ClientRequestID,
-			CustomerID:      customerID,
-			CustomerName:    customerName,
-			Discount:        discount,
-			Total:           total,
-			Received:        received,
-			Change:          change,
-			SoldAt:          now,
+			BillNo:             generatedBillNo,
+			ClientRequestID:    input.ClientRequestID,
+			CustomerID:         customerID,
+			CustomerName:       customerName,
+			Discount:           discount,
+			Total:              total,
+			Received:           received,
+			Change:             change,
+			SoldAt:             now,
+			KySkippedByCashier: input.KySkippedByCashier,
 		}
 		res, err := mdb.Sales().InsertOne(txCtx, sale)
 		if err != nil {
@@ -269,7 +270,8 @@ func (h *SaleHandler) Create(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, models.SaleResponse{
 		ID:     saleID.Hex(),
 		BillNo: billNo, Discount: discount, Total: total, Change: change,
-		StockUpdates: updates,
+		StockUpdates:       updates,
+		KySkippedByCashier: input.KySkippedByCashier,
 	})
 }
 
@@ -280,11 +282,12 @@ func (h *SaleHandler) writeExistingSaleResponse(ctx context.Context, mdb *db.Mon
 		return false
 	}
 	jsonOK(w, models.SaleResponse{
-		ID:       sale.ID.Hex(),
-		BillNo:   sale.BillNo,
-		Discount: sale.Discount,
-		Total:    sale.Total,
-		Change:   sale.Change,
+		ID:                 sale.ID.Hex(),
+		BillNo:             sale.BillNo,
+		Discount:           sale.Discount,
+		Total:              sale.Total,
+		Change:             sale.Change,
+		KySkippedByCashier: sale.KySkippedByCashier,
 	})
 	return true
 }
