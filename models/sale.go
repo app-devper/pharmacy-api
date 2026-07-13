@@ -7,19 +7,20 @@ import (
 )
 
 type Sale struct {
-	ID              bson.ObjectID  `bson:"_id,omitempty"  json:"id"`
-	BillNo          string         `bson:"bill_no"        json:"bill_no"`
-	ClientRequestID string         `bson:"client_request_id,omitempty" json:"client_request_id,omitempty"`
-	CustomerID      *bson.ObjectID `bson:"customer_id"    json:"customer_id"`
-	CustomerName    string         `bson:"customer_name"  json:"customer_name"`
-	Discount        float64        `bson:"discount"       json:"discount"`
-	Total           float64        `bson:"total"          json:"total"`
-	Received        float64        `bson:"received"       json:"received"`
-	Change          float64        `bson:"change"         json:"change"`
-	SoldAt          time.Time      `bson:"sold_at"        json:"sold_at"`
-	Voided          bool           `bson:"voided,omitempty"       json:"voided,omitempty"`
-	VoidReason      string         `bson:"void_reason,omitempty"  json:"void_reason,omitempty"`
-	VoidedAt        *time.Time     `bson:"voided_at,omitempty"    json:"voided_at,omitempty"`
+	ID                 bson.ObjectID  `bson:"_id,omitempty"  json:"id"`
+	BillNo             string         `bson:"bill_no"        json:"bill_no"`
+	ClientRequestID    string         `bson:"client_request_id,omitempty" json:"client_request_id,omitempty"`
+	CustomerID         *bson.ObjectID `bson:"customer_id"    json:"customer_id"`
+	CustomerName       string         `bson:"customer_name"  json:"customer_name"`
+	Discount           float64        `bson:"discount"       json:"discount"`
+	Total              float64        `bson:"total"          json:"total"`
+	Received           float64        `bson:"received"       json:"received"`
+	Change             float64        `bson:"change"         json:"change"`
+	SoldAt             time.Time      `bson:"sold_at"        json:"sold_at"`
+	KySkippedByCashier bool           `bson:"ky_skipped_by_cashier,omitempty" json:"ky_skipped_by_cashier,omitempty"`
+	Voided             bool           `bson:"voided,omitempty"       json:"voided,omitempty"`
+	VoidReason         string         `bson:"void_reason,omitempty"  json:"void_reason,omitempty"`
+	VoidedAt           *time.Time     `bson:"voided_at,omitempty"    json:"voided_at,omitempty"`
 }
 
 // LotDeduction records one lot the FEFO engine pulled from when fulfilling a
@@ -97,11 +98,12 @@ type SaleItemInput struct {
 }
 
 type SaleInput struct {
-	ClientRequestID string          `json:"client_request_id,omitempty"`
-	CustomerID      *string         `json:"customer_id"`
-	Items           []SaleItemInput `json:"items"`
-	Discount        float64         `json:"discount"`
-	Received        float64         `json:"received"`
+	ClientRequestID    string          `json:"client_request_id,omitempty"`
+	KySkippedByCashier bool            `json:"ky_skipped_by_cashier,omitempty"`
+	CustomerID         *string         `json:"customer_id"`
+	Items              []SaleItemInput `json:"items"`
+	Discount           float64         `json:"discount"`
+	Received           float64         `json:"received"`
 }
 
 // StockUpdate is an optimistic-update hint for the client: after a sale succeeds,
@@ -113,10 +115,11 @@ type StockUpdate struct {
 }
 
 type SaleResponse struct {
-	ID           string        `json:"id"`
-	BillNo       string        `json:"bill_no"`
-	Discount     float64       `json:"discount"`
-	Total        float64       `json:"total"`
-	Change       float64       `json:"change"`
-	StockUpdates []StockUpdate `json:"stock_updates,omitempty"`
+	ID                 string        `json:"id"`
+	BillNo             string        `json:"bill_no"`
+	Discount           float64       `json:"discount"`
+	Total              float64       `json:"total"`
+	Change             float64       `json:"change"`
+	StockUpdates       []StockUpdate `json:"stock_updates,omitempty"`
+	KySkippedByCashier bool          `json:"ky_skipped_by_cashier,omitempty"`
 }
