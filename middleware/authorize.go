@@ -6,13 +6,14 @@ import (
 
 // roleLevel maps role name to numeric level. Higher = more privilege.
 var roleLevel = map[string]int{
-	"USER":  1,
-	"ADMIN": 2,
-	"SUPER": 3,
+	"USER":    1,
+	"MANAGER": 2,
+	"ADMIN":   3,
+	"SUPER":   4,
 }
 
 // RequireRole returns middleware that allows requests where the caller's role
-// is >= minRole in the hierarchy (USER < ADMIN < SUPER).
+// is >= minRole in the hierarchy (USER < MANAGER < ADMIN < SUPER).
 func RequireRole(minRole string) func(http.Handler) http.Handler {
 	min := roleLevel[minRole]
 	return func(next http.Handler) http.Handler {
