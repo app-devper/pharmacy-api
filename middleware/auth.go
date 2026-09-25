@@ -30,20 +30,19 @@ func RequireAuth(secretKey, expectedSystem string) func(http.Handler) http.Handl
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			authHeader := r.Header.Get("Authorization")
-			if authHeader == "" {
+			if r.Header.Get("Authorization") == "" {
 				http.Error(w, `{"error":"missing authorization header"}`, http.StatusUnauthorized)
 				return
 			}
 
-			parts := strings.Fields(authHeader)
-			if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
+			token, ok := bearerToken(r)
+			if !ok {
 				http.Error(w, `{"error":"invalid authorization header"}`, http.StatusUnauthorized)
 				return
 			}
 
 			claims := &AccessClaims{}
-			tkn, err := jwt.ParseWithClaims(parts[1], claims, func(token *jwt.Token) (interface{}, error) {
+			tkn, err := jwt.ParseWithClaims(token, claims, func(token *jwt.Token) (interface{}, error) {
 				if token.Method == nil || token.Method.Alg() != jwt.SigningMethodHS256.Alg() {
 					return nil, errors.New("unexpected signing method")
 				}
@@ -71,6 +70,15 @@ func RequireAuth(secretKey, expectedSystem string) func(http.Handler) http.Handl
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// bearerToken returns the token from an "Authorization: Bearer <token>" header.
+func bearerToken(r *http.Request) (string, bool) {
+	parts := strings.Fields(r.Header.Get("Authorization"))
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
+		return "", false
+	}
+	return parts[1], true
 }
 
 func GetRole(ctx context.Context) string {
