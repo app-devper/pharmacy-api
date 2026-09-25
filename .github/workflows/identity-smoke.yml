@@ -1,0 +1,72 @@
+name: identity-smoke
+
+# Runs real um-api and pharmacy-api together (ADR-0004): UM session changes
+# must reach pharmacy within the 30-second cache, and a Redis outage must
+# refuse protected operations while catalog reads degrade. Nightly runs catch
+# drift in UM's session layout on um-api develop.
+
+on:
+  pull_request:
+    paths:
+      - main.go
+      - config/**
+      - middleware/**
+      - routes/**
+      - scripts/identity-smoke/**
+      - go.mod
+      - go.sum
+      - .github/workflows/identity-smoke.yml
+  schedule:
+    - cron: "0 19 * * *" # 02:00 Asia/Bangkok
+  workflow_dispatch:
+    inputs:
+      um_ref:
+        description: um-api branch, tag, or SHA to test against
+        required: false
+
+jobs:
+  smoke:
+    name: identity smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Repository variable UM_REF overrides develop, e.g. while a UM change
+      # this depends on is still in review.
+      UM_REF: ${{ inputs.um_ref || vars.UM_REF || 'develop' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: pharmacy-api
+
+      - uses: actions/checkout@v4
+        with:
+          repository: app-devper/um-api
+          ref: ${{ env.UM_REF }}
+          path: um-api
+
+      - uses: actions/setup-go@v5
+        with:
+          # um-api pins the newer Go version; it builds both services.
+          go-version-file: um-api/go.mod
+          cache-dependency-path: |
+            um-api/go.sum
+            pharmacy-api/go.sum
+
+      - name: Start MongoDB and Redis
+        run: |
+          docker run -d --name smoke-mongo -p 27017:27017 mongo:7
+          docker run -d --name smoke-redis -p 6379:6379 redis:7
+
+      - name: Build services
+        run: |
+          (cd um-api && go build -o "$RUNNER_TEMP/um-api" .)
+          (cd pharmacy-api && go build -o "$RUNNER_TEMP/pharmacy-api" .)
+
+      - name: Run identity smoke test
+        env:
+          UM_BIN: ${{ runner.temp }}/um-api
+          PHARMACY_BIN: ${{ runner.temp }}/pharmacy-api
+          REDIS_CONTAINER: smoke-redis
+        run: |
+          echo "um-api ref: $UM_REF ($(git -C um-api rev-parse --short HEAD))"
+          pharmacy-api/scripts/identity-smoke/run.sh

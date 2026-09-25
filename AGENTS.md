@@ -95,6 +95,7 @@ Keep this repository layout flat. Do not introduce a nested `app/features/...` a
 - Run handler tests: `go test ./handlers`.
 - Run one test: `go test -run TestBuildDrugCreatePayload ./handlers`.
 - Format touched Go files: `gofmt -w <file>`.
+- Identity smoke test (real um-api + pharmacy-api, needs MongoDB and Redis, ~75 s): see `README.md` → Identity smoke test. Run it when changing `middleware/identity.go`, `middleware/auth.go`, route groups, or config; CI runs it on those PRs and nightly against um-api `develop`.
 
 Prefer running the narrowest relevant test first, then broader tests if the change is larger.
 
@@ -130,5 +131,5 @@ Prefer running the narrowest relevant test first, then broader tests if the chan
 - Do not use `time.Local` for reports, receipts, KHY forms, or dashboard date ranges.
 - Do not assume empty barcode or customer phone must be unique; partial indexes intentionally allow multiple empty values.
 - Do not allow stock-changing paths to skip lot, oversell, return, movement, or reconciliation rules.
-- Do not make tests depend on a real MongoDB instance.
+- Do not make `go test` depend on a real MongoDB instance. The identity smoke script (`scripts/identity-smoke/`) is the deliberate exception: it runs outside `go test` and is the cross-service smoke test the architecture notes call for.
 - Do not treat the checked-in `.env` or `pharmacy-server` binary as authoritative source files.

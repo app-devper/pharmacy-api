@@ -121,6 +121,23 @@ Authorization: Bearer <token>
 | ไม่มี session (logout / revoke / หมดอายุ) หรือเป็นของ system อื่น | `401` | `401` |
 | Redis ติดต่อไม่ได้ และไม่มีผลใน cache (≤30 วินาที) | ✅ ใช้ต่อด้วย token ที่ลงนามแล้ว | `503 {"error":"identity service unavailable"}` |
 
+### Identity smoke test
+
+`scripts/identity-smoke/run.sh` รัน um-api กับ pharmacy-api ตัวจริงพร้อมกันแล้วตรวจว่า logout / ลบ user ใน Um-Api มีผลที่นี่ภายใน 30 วินาที และตอน Redis ล่ม endpoint อื่นได้ `503` ส่วน catalog reads ยังใช้ได้ (ใช้เวลาราว 75 วินาที)
+
+CI รันให้อัตโนมัติ ([identity-smoke.yml](.github/workflows/identity-smoke.yml)) เมื่อ PR แตะ auth / routes / config และทุกคืนกับ um-api `develop` ตั้ง repository variable `UM_REF` เพื่อทดสอบกับ branch อื่นของ um-api ชั่วคราว
+
+รันในเครื่อง (ต้องมี MongoDB และ Redis ที่รันอยู่ — script จะลบและ seed database `um_smoke`):
+
+```bash
+go build -o /tmp/pharmacy-api . && (cd ../../UM/um-api && go build -o /tmp/um-api .)
+UM_BIN=/tmp/um-api PHARMACY_BIN=/tmp/pharmacy-api \
+MONGO_URI=mongodb://127.0.0.1:27017 REDIS_ADDR=127.0.0.1:6379 \
+  scripts/identity-smoke/run.sh
+```
+
+ใช้ `REDIS_CONTAINER=<name>` ถ้า Redis รันใน Docker (script จะ `docker pause` เพื่อจำลอง Redis ล่ม) ไม่อย่างนั้น script จะ `SIGSTOP` process `redis-server` ในเครื่อง
+
 ---
 
 ## API Reference
