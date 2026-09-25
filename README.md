@@ -8,14 +8,14 @@ REST API สำหรับระบบจัดการร้านขาย�
 
 ## Tech Stack
 
-![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat-square&logo=go&logoColor=white)
+![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?style=flat-square&logo=go&logoColor=white)
 ![Chi](https://img.shields.io/badge/Chi_Router-v5-00ADD8?style=flat-square&logo=go&logoColor=white)
 ![MongoDB](https://img.shields.io/badge/MongoDB-v2_Driver-47A248?style=flat-square&logo=mongodb&logoColor=white)
 ![JWT](https://img.shields.io/badge/JWT-Auth-000000?style=flat-square&logo=jsonwebtokens&logoColor=white)
 
 | Component | Detail |
 |-----------|--------|
-| Language | Go 1.25 |
+| Language | Go 1.26 |
 | Router | Chi v5 |
 | Database | MongoDB (Driver v2) |
 | Auth | JWT (HS256) — verify token จาก Um-Api |
@@ -60,7 +60,7 @@ backend/
 
 ### ข้อกำหนด
 
-- Go 1.25+
+- Go 1.26+
 - MongoDB (local หรือ Atlas)
 
 ### ตั้งค่า Environment
