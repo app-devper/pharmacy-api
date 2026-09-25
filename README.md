@@ -75,9 +75,14 @@ FRONTEND_ORIGIN=http://localhost:5173,https://dpharm.web.app
 SECRET_KEY=your_jwt_secret_key
 SYSTEM=PHARMACY
 UM_API_URL=http://localhost:8585
+UM_REDIS_HOST=localhost:6379
 ```
 
 > **SECRET_KEY** ต้องตรงกับค่าที่ใช้ใน Um-Api เพื่อ verify JWT token
+>
+> **UM_REDIS_HOST** — Redis ของ Um-Api (ตัวเดียวกับ `REDIS_HOST` ของ Um-Api) รูปแบบ `host:port` หรือ `redis://[:password@]host:port[/db]` ใช้อ่าน `session:<jti>` เพื่อตรวจ session แบบ live (ADR-0004) ใช้สิทธิ์อ่านอย่างเดียว บน Cloud Run ต้องต่อผ่าน VPC connector ไปยัง Memorystore **ถ้าไม่ตั้ง** การตรวจ live จะปิด และ session ที่ถูก revoke ยังใช้ได้จน token หมดอายุ — ใช้ได้เฉพาะ local development
+>
+> **UM_API_URL** — ยังไม่ถูกใช้ใน backend
 >
 > **FRONTEND_ORIGIN** — comma-separated origin allowlist for CORS. When set, the
 > server reflects `Origin` only when it matches one of the entries. **Leave
@@ -104,9 +109,17 @@ Authorization: Bearer <token>
 ```
 
 - Token ได้จาก **Um-Api** (`POST /api/um/v1/auth/login`)
-- Backend verify token locally ด้วย shared `SECRET_KEY` (HS256)
-- JWT claims: `role` (SUPER/ADMIN/USER), `system`, `clientId`, `sessionId`, `exp`
-- Environment ที่ต้องตั้งเพิ่ม: `SYSTEM`
+- Backend verify ลายเซ็น token locally ด้วย shared `SECRET_KEY` (HS256) และ `system` ต้องตรงกับ `SYSTEM`
+- จากนั้นอ่าน `session:<jti>` จาก Redis ของ Um-Api: ถ้าไม่มี key แสดงว่า logout / ถูก revoke / หมดอายุ และ session ต้องออกให้ `system` เดียวกับ token ผลลัพธ์ cache ต่อ session ได้ไม่เกิน 30 วินาที
+- Um-Api revoke session ทุกครั้งที่เปลี่ยน role / status / password หรือลบ user จึงใช้ `role` และ `clientId` ใน token ได้ตราบที่ session ยังอยู่ — การเปลี่ยนแปลงใน Um-Api มีผลที่นี่ภายใน 60 วินาที
+- JWT claims: `role`, `system`, `clientId`, `jti` (session id), `exp`
+- Environment ที่ต้องตั้งเพิ่ม: `SYSTEM`, `UM_REDIS_HOST`
+
+| สถานการณ์ | Catalog reads (`GET /drugs`, `/drugs/low-stock`, `/drugs/:id/lots`, `/lots/expiring`) | Endpoint อื่นทั้งหมด |
+|---|---|---|
+| session ยังอยู่ใน Redis | ✅ | ✅ |
+| ไม่มี session (logout / revoke / หมดอายุ) หรือเป็นของ system อื่น | `401` | `401` |
+| Redis ติดต่อไม่ได้ และไม่มีผลใน cache (≤30 วินาที) | ✅ ใช้ต่อด้วย token ที่ลงนามแล้ว | `503 {"error":"identity service unavailable"}` |
 
 ---
 

@@ -34,6 +34,7 @@ func Setup(
 	authSystem string,
 	allowedOrigins []string,
 	gatewayHosts string,
+	live *mw.LiveIdentity,
 ) *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(chimiddleware.Logger)
@@ -45,13 +46,21 @@ func Setup(
 	r.Route("/api/pharmacy/v1", func(r chi.Router) {
 		r.Use(mw.RequireAuth(secretKey, authSystem))
 
-		// ── USER + ADMIN + SUPER ──────────────────────────────────
+		// ── Catalog reads (USER + ADMIN + SUPER) ──────────────────
+		// ADR-0001: may continue under the signed token while UM is unreachable.
 		r.Group(func(r chi.Router) {
-			// Drugs (read)
+			r.Use(live.RequireOrDegrade())
+
 			r.Get("/drugs", dh.List)
 			r.Get("/drugs/low-stock", dh.LowStock)
 			r.Get("/drugs/{id}/lots", lh.ListLots)
 			r.Get("/lots/expiring", lh.Expiring)
+		})
+
+		// ── USER + ADMIN + SUPER ──────────────────────────────────
+		// Writes and sensitive reads need a current UM answer (ADR-0001).
+		r.Group(func(r chi.Router) {
+			r.Use(live.Require())
 
 			// Customers (read + add)
 			r.Get("/customers", ch.List)
@@ -83,6 +92,7 @@ func Setup(
 
 		// ── ADMIN + SUPER only ────────────────────────────────────
 		r.Group(func(r chi.Router) {
+			r.Use(live.Require())
 			r.Use(mw.RequireRole(RoleADMIN))
 
 			// Drug management
