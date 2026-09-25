@@ -7,7 +7,7 @@ This backend is a separate Git repository inside the `pharmacy-app` workspace. R
 
 ## Project Overview
 - Standalone Pharmacy POS REST API for `pharmacy-app`.
-- Stack: Go 1.25, Chi v5, MongoDB Go Driver v2, JWT HS256 auth.
+- Stack: Go 1.26, Chi v5, MongoDB Go Driver v2, JWT HS256 auth.
 - Multi-tenant by `clientId`; each tenant maps to its own MongoDB database.
 - Auth tokens are issued by the external Um-Api. This service verifies the JWT signature locally with `SECRET_KEY`, then confirms the session is still live by reading `session:<jti>` from Um-Api's Redis (ADR-0004, `middleware/identity.go`). Do not add Um-Api HTTP calls, and never write to Um-Api's Redis.
 - The only Redis use is read-only session lookups in Um-Api's Redis. Tenant Mongo handles and live-identity answers (≤30 seconds per session) are cached in-process.
