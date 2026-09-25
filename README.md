@@ -2,6 +2,8 @@
 
 REST API สำหรับระบบจัดการร้านขายยา — จัดการยา, สต็อก, การขาย, ลูกค้า, รายงาน และแบบฟอร์ม ขย.
 
+ขอบเขตโดเมนและการตัดสินใจ: [Context map](./CONTEXT-MAP.md), [Architecture notes](./docs/ARCHITECTURE-NOTES.md), [ADRs](./docs/adr/). สัญญาร่วมกับแอปและ `um-api` อยู่ใน [KMP integration map](https://github.com/app-devper/pharmacy-app-kmp/blob/develop/docs/INTEGRATION-CONTRACTS.md).
+
 ---
 
 ## Tech Stack

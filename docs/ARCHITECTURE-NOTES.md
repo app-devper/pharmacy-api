@@ -1,0 +1,19 @@
+# Pharmacy API architecture notes
+
+These notes trace the agreed cross-repository design to this service. They describe target behavior, not a claim that the current API implements it. Shared decisions live in the [product ADRs](https://github.com/app-devper/pharmacy-app-kmp/tree/develop/docs/adr); endpoint details remain owned by this repository.
+
+## Current code and target contract
+
+| Area | Current code | Agreed target |
+| --- | --- | --- |
+| Authentication | [auth middleware](../middleware/auth.go) verifies signed JWT claims locally. A changed role or revoked UM session can remain effective here until token expiry. | Ask `um-api` for current session, role, user, system, and tenant status through a dedicated contract. Cache a result by session ID for at most 30 seconds, bound to the signed token's identity/system/tenant. Stop writes and sensitive reads when no current result is available. |
+| Roles | [routes](../routes/routes.go) and [role middleware](../middleware/authorize.go) recognize USER, ADMIN, and SUPER. MANAGER is rejected on the broad ADMIN group, while six reports are exposed to USER. | Split routes by agreed operation permission. MANAGER handles stock counts/adjustments/lots, receipts/suppliers, customer edits, labels, and `slow-drugs`; ADMIN+ retains drug identity/price edits, whole-bill void, KY administration, settings writes, and other reports. |
+| Tenant scope | [Mongo manager](../db/mongo.go) selects a database from the signed `clientId`; SUPER with `000` does not automatically select another tenant. | Preserve this isolation. Future support access requires explicit, auditable delegation to a named tenant. |
+| Sale and return | [sales handler](../handlers/sales.go) uses `client_request_id` for sale retries, but [returns](../handlers/drug_returns.go) lack the same request identity. | Return retries must resolve to the same confirmed result. USER may return against a bill with actor and reason; whole-bill void stays ADMIN+. |
+| Offline sale | [sale input and handler](../handlers/sales.go) assign sale time at backend receipt and resolve price from the current drug. | Preserve cashier submission time and approved price through replay. Validate clock evidence and price policy; hold untrusted/conflicted entries for review. A late confirmed sale adjusts a closed period with an audit trail. |
+| End-of-day | [routes](../routes/routes.go) expose `GET /report/eod`; there is no durable close command, although KMP calls `POST /report/eod/close`. | Sales owns a durable close record, actor, and covered period; Reporting reads it. |
+| API contract | [README](../README.md) and routes describe the API; there is no pharmacy OpenAPI file or cross-repo contract gate. | Publish pharmacy OpenAPI here, check route/response drift on affected PRs, and verify KMP's used DTOs against it. Join nightly and pre-release three-service smoke tests. |
+
+Sensitive reads include customer-identifying data, sale history and bill items, customer-bearing receipts, KY, financial reports, user data, and business-rule settings. Ordinary catalog reads may continue with a valid signed token during a UM outage. The five report routes `summary`, `dashboard`, `daily`, `monthly`, and `top-drugs` are ADMIN+ targets; `slow-drugs` is MANAGER+.
+
+The current [AGENTS.md](../AGENTS.md) instructs agents to keep local JWT-only authorization and a three-role hierarchy. Those instructions describe the existing implementation and conflict with the agreed target for live UM verification and MANAGER permissions. Revise those guardrails as part of the corresponding implementation work; this documentation change does not alter authorization behavior.
