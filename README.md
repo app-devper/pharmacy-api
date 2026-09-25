@@ -2,6 +2,8 @@
 
 REST API สำหรับระบบจัดการร้านขายยา — จัดการยา, สต็อก, การขาย, ลูกค้า, รายงาน และแบบฟอร์ม ขย.
 
+ขอบเขตโดเมนและการตัดสินใจ: [Context map](./CONTEXT-MAP.md), [Architecture notes](./docs/ARCHITECTURE-NOTES.md), [ADRs](./docs/adr/). สัญญาร่วมกับแอปและ `um-api` อยู่ใน [KMP integration map](https://github.com/app-devper/pharmacy-app-kmp/blob/develop/docs/INTEGRATION-CONTRACTS.md).
+
 ---
 
 ## Tech Stack
@@ -73,9 +75,14 @@ FRONTEND_ORIGIN=http://localhost:5173,https://dpharm.web.app
 SECRET_KEY=your_jwt_secret_key
 SYSTEM=PHARMACY
 UM_API_URL=http://localhost:8585
+UM_REDIS_HOST=localhost:6379
 ```
 
 > **SECRET_KEY** ต้องตรงกับค่าที่ใช้ใน Um-Api เพื่อ verify JWT token
+>
+> **UM_REDIS_HOST** — Redis ของ Um-Api (ตัวเดียวกับ `REDIS_HOST` ของ Um-Api) รูปแบบ `host:port` หรือ `redis://[:password@]host:port[/db]` ใช้อ่าน `session:<jti>` เพื่อตรวจ session แบบ live (ADR-0004) ใช้สิทธิ์อ่านอย่างเดียว บน Cloud Run ต้องต่อผ่าน VPC connector ไปยัง Memorystore **ถ้าไม่ตั้ง** การตรวจ live จะปิด และ session ที่ถูก revoke ยังใช้ได้จน token หมดอายุ — ใช้ได้เฉพาะ local development
+>
+> **UM_API_URL** — ยังไม่ถูกใช้ใน backend
 >
 > **FRONTEND_ORIGIN** — comma-separated origin allowlist for CORS. When set, the
 > server reflects `Origin` only when it matches one of the entries. **Leave
@@ -102,9 +109,34 @@ Authorization: Bearer <token>
 ```
 
 - Token ได้จาก **Um-Api** (`POST /api/um/v1/auth/login`)
-- Backend verify token locally ด้วย shared `SECRET_KEY` (HS256)
-- JWT claims: `role` (SUPER/ADMIN/USER), `system`, `clientId`, `sessionId`, `exp`
-- Environment ที่ต้องตั้งเพิ่ม: `SYSTEM`
+- Backend verify ลายเซ็น token locally ด้วย shared `SECRET_KEY` (HS256) และ `system` ต้องตรงกับ `SYSTEM`
+- จากนั้นอ่าน `session:<jti>` จาก Redis ของ Um-Api: ถ้าไม่มี key แสดงว่า logout / ถูก revoke / หมดอายุ และ session ต้องออกให้ `system` เดียวกับ token ผลลัพธ์ cache ต่อ session ได้ไม่เกิน 30 วินาที
+- Um-Api revoke session ทุกครั้งที่เปลี่ยน role / status / password หรือลบ user จึงใช้ `role` และ `clientId` ใน token ได้ตราบที่ session ยังอยู่ — การเปลี่ยนแปลงใน Um-Api มีผลที่นี่ภายใน 60 วินาที
+- JWT claims: `role`, `system`, `clientId`, `jti` (session id), `exp`
+- Environment ที่ต้องตั้งเพิ่ม: `SYSTEM`, `UM_REDIS_HOST`
+
+| สถานการณ์ | Catalog reads (`GET /drugs`, `/drugs/low-stock`, `/drugs/:id/lots`, `/lots/expiring`) | Endpoint อื่นทั้งหมด |
+|---|---|---|
+| session ยังอยู่ใน Redis | ✅ | ✅ |
+| ไม่มี session (logout / revoke / หมดอายุ) หรือเป็นของ system อื่น | `401` | `401` |
+| Redis ติดต่อไม่ได้ และไม่มีผลใน cache (≤30 วินาที) | ✅ ใช้ต่อด้วย token ที่ลงนามแล้ว | `503 {"error":"identity service unavailable"}` |
+
+### Identity smoke test
+
+`scripts/identity-smoke/run.sh` รัน um-api กับ pharmacy-api ตัวจริงพร้อมกันแล้วตรวจว่า logout / ลบ user ใน Um-Api มีผลที่นี่ภายใน 30 วินาที และตอน Redis ล่ม endpoint อื่นได้ `503` ส่วน catalog reads ยังใช้ได้ (ใช้เวลาราว 75 วินาที)
+
+CI รันให้อัตโนมัติ ([identity-smoke.yml](.github/workflows/identity-smoke.yml)) เมื่อ PR แตะ auth / routes / config และทุกคืนกับ um-api `develop` ตั้ง repository variable `UM_REF` เพื่อทดสอบกับ branch อื่นของ um-api ชั่วคราว
+
+รันในเครื่อง (ต้องมี MongoDB และ Redis ที่รันอยู่ — script จะลบและ seed database `um_smoke`):
+
+```bash
+go build -o /tmp/pharmacy-api . && (cd ../../UM/um-api && go build -o /tmp/um-api .)
+UM_BIN=/tmp/um-api PHARMACY_BIN=/tmp/pharmacy-api \
+MONGO_URI=mongodb://127.0.0.1:27017 REDIS_ADDR=127.0.0.1:6379 \
+  scripts/identity-smoke/run.sh
+```
+
+ใช้ `REDIS_CONTAINER=<name>` ถ้า Redis รันใน Docker (script จะ `docker pause` เพื่อจำลอง Redis ล่ม) ไม่อย่างนั้น script จะ `SIGSTOP` process `redis-server` ในเครื่อง
 
 ---
 
@@ -302,32 +334,40 @@ Bootstrap (main.go): `000` ถูก warm-up โดย `CreateIndexesForClient("
 
 ## RBAC (Role-Based Access Control)
 
+ลำดับสิทธิ์ `USER < MANAGER < ADMIN < SUPER` ตาม shared role policy (KMP ADR-0004) — role ที่ไม่รู้จักหรือว่างเข้าไม่ได้ทุก endpoint รายการ route ทั้งหมดพร้อมสิทธิ์ขั้นต่ำอยู่ใน [`routes/permissions_test.go`](routes/permissions_test.go) (test จะ fail ถ้ามี route ที่ไม่ได้กำหนดสิทธิ์)
+
 | Role | สิทธิ์ |
 |------|--------|
-| `SUPER` | ทุกอย่าง |
-| `ADMIN` | จัดการยา, ขาย, รายงาน, นำเข้า, ซัพพลายเออร์, แบบฟอร์ม ขย. |
-| `USER` | ขาย, ดูประวัติ, ดูสต็อก, จัดการลูกค้า (read + add) |
+| `SUPER` | ทุกอย่าง (ใน tenant ของตัวเอง) |
+| `ADMIN` | ทุกอย่างของ MANAGER + แก้ข้อมูล/ราคายา, ยกเลิกทั้งบิล, รายงานการเงิน, แบบฟอร์ม ขย., แก้ settings |
+| `MANAGER` | ทุกอย่างของ USER + ตรวจนับ/ปรับสต็อก/lot, รับสินค้า, ซัพพลายเออร์, แก้ข้อมูลลูกค้า, พิมพ์ label, รายงานยาขายช้า |
+| `USER` | ขาย, คืนยาตามบิล, ดูประวัติ, ดูสต็อก, ลูกค้า (ค้นหา + เพิ่ม) |
 
 ### Endpoints ที่ต้องการ ADMIN หรือ SUPER
 
-- `POST /api/pharmacy/v1/drugs`, `PUT /api/pharmacy/v1/drugs/:id`, `POST /api/pharmacy/v1/drugs/bulk`, `GET /api/pharmacy/v1/drugs/reorder-suggestions`
-- `POST /api/pharmacy/v1/drugs/:id/adjustments`, `POST /api/pharmacy/v1/drugs/:id/lots`, `DELETE /api/pharmacy/v1/drugs/:id/lots/:lot_id`, `POST /api/pharmacy/v1/lots/writeoff`
-- `PUT /api/pharmacy/v1/customers/:id`
+- `POST /api/pharmacy/v1/drugs`, `PUT /api/pharmacy/v1/drugs/:id`, `POST /api/pharmacy/v1/drugs/bulk`
 - `POST /api/pharmacy/v1/sales/:id/void`
-- `GET /api/pharmacy/v1/report/eod`, `GET /api/pharmacy/v1/report/profit`
-- `GET|POST /api/pharmacy/v1/ky9`, `GET|POST /api/pharmacy/v1/ky10`, `GET|POST /api/pharmacy/v1/ky11`, `GET|POST /api/pharmacy/v1/ky12`
-- `/api/pharmacy/v1/imports/*` ทั้งหมด
+- `GET /api/pharmacy/v1/report/summary`, `/dashboard`, `/daily`, `/monthly`, `/top-drugs`, `/eod`, `/profit`
+- `GET|POST /api/pharmacy/v1/ky9`, `GET|POST /api/pharmacy/v1/ky10`, `GET|POST /api/pharmacy/v1/ky11`, `GET|POST /api/pharmacy/v1/ky12`, `GET /api/pharmacy/v1/export/:form`
+- `PUT /api/pharmacy/v1/settings`
+
+### Endpoints ที่ต้องการ MANAGER ขึ้นไป
+
+- `GET /api/pharmacy/v1/drugs/reorder-suggestions`
+- `GET|POST /api/pharmacy/v1/drugs/:id/adjustments`, `GET|POST /api/pharmacy/v1/stock-counts`
+- `POST /api/pharmacy/v1/drugs/:id/lots`, `DELETE /api/pharmacy/v1/drugs/:id/lots/:lot_id`, `POST /api/pharmacy/v1/lots/writeoff`
+- `/api/pharmacy/v1/imports/*` ทั้งหมด (รับสินค้า — `sell_price` ของ lot ไม่เปลี่ยนราคาขายของยา)
 - `/api/pharmacy/v1/suppliers/*` ทั้งหมด
-- `GET /api/pharmacy/v1/export/:form`
+- `PUT /api/pharmacy/v1/customers/:id`
 - `POST /api/pharmacy/v1/labels/print`
+- `GET /api/pharmacy/v1/report/slow-drugs`
 
 ### Endpoints ที่ USER เข้าถึงได้
 
 `GET /api/pharmacy/v1/drugs`, `GET /api/pharmacy/v1/drugs/low-stock`, `GET /api/pharmacy/v1/drugs/:id/lots`, `GET /api/pharmacy/v1/lots/expiring`,
 `GET|POST /api/pharmacy/v1/customers`, `GET /api/pharmacy/v1/customers/:id/sales`,
 `GET|POST /api/pharmacy/v1/sales`, `GET /api/pharmacy/v1/sales/:id/items`, `GET /api/pharmacy/v1/sales/:id/ky`, `POST /api/pharmacy/v1/sales/:id/return`, `GET /api/pharmacy/v1/sales/:id/returns`,
-`GET /api/pharmacy/v1/report/summary`, `GET /api/pharmacy/v1/report/dashboard`, `GET /api/pharmacy/v1/report/daily`, `GET /api/pharmacy/v1/report/monthly`, `GET /api/pharmacy/v1/report/top-drugs`, `GET /api/pharmacy/v1/report/slow-drugs`,
-`GET /api/pharmacy/v1/movements`
+`GET /api/pharmacy/v1/movements`, `GET /api/pharmacy/v1/settings`
 
 ---
 

@@ -9,8 +9,8 @@ This backend is a separate Git repository inside the `pharmacy-app` workspace. R
 - Standalone Pharmacy POS REST API for `pharmacy-app`.
 - Stack: Go 1.25, Chi v5, MongoDB Go Driver v2, JWT HS256 auth.
 - Multi-tenant by `clientId`; each tenant maps to its own MongoDB database.
-- Auth tokens are issued by the external Um-Api, but this service verifies JWTs locally with `SECRET_KEY`; do not add outbound Um-Api calls.
-- There is no Redis/cache layer. Tenant Mongo handles are cached in-process by the DB manager.
+- Auth tokens are issued by the external Um-Api. This service verifies the JWT signature locally with `SECRET_KEY`, then confirms the session is still live by reading `session:<jti>` from Um-Api's Redis (ADR-0004, `middleware/identity.go`). Do not add Um-Api HTTP calls, and never write to Um-Api's Redis.
+- The only Redis use is read-only session lookups in Um-Api's Redis. Tenant Mongo handles and live-identity answers (≤30 seconds per session) are cached in-process.
 - The frontend consumes this API, so API contract changes may require synchronized frontend updates.
 
 ## Repository Layout
@@ -30,17 +30,19 @@ Keep this repository layout flat. Do not introduce a nested `app/features/...` a
 - `main.go` loads config, connects MongoDB, bootstraps the default tenant, constructs handlers, and calls `routes.Setup`.
 - `routes/routes.go` builds the Chi router, applies logging/recovery/CORS, then protects `/api/pharmacy/v1` with JWT middleware.
 - `middleware/auth.go` validates HS256 JWTs and stores role, system, tenant, and session identifiers in request context.
+- `middleware/identity.go` checks the token's session still exists in Um-Api's Redis and was issued for the token's system. The role in context stays the token's claim, which is current while its session lives because Um-Api revokes sessions on every role/status/password/account change. Writes and sensitive reads use `live.Require()`; only ordinary catalog reads use `live.RequireOrDegrade()` and may continue under the signed token while Um-Api is unreachable.
 - `middleware/authorize.go` enforces role ordering with `RequireRole`.
 - Handlers resolve the current tenant through middleware helpers and then use the tenant database from `db.MongoManager`.
 
 ## Architecture Rules
 - Keep the current flat layout; do not introduce an `app/features/...` structure.
 - API base path is `/api/pharmacy/v1`; routes are auth-protected.
-- Roles are ordered `USER < ADMIN < SUPER`; `RequireRole(min)` allows roles at or above `min`.
+- Roles are ordered `USER < MANAGER < ADMIN < SUPER` (shared role policy, KMP ADR-0004); `RequireRole(min)` allows roles at or above `min`. Every route group names its minimum role, so unknown or empty roles reach nothing.
+- Every route has an entry in `routes/permissions_test.go`; the test fails for an unclassified route. MANAGER+ covers stock counts/adjustments/lots, goods receipt, suppliers, customer edits, labels, and `slow-drugs`; drug identity/price, whole-bill void, reports, KY, and settings writes stay ADMIN+.
 - Handlers should get the tenant from request context via middleware helpers, not from request bodies.
 - Preserve multi-tenant isolation; never hardcode a tenant database except for the existing default tenant behavior.
 - Validate `clientId` consistently with the DB manager rules before constructing database names.
-- Add new endpoints in `routes/routes.go` under the correct role group. Prefer `USER+` only for read/basic workflows and `ADMIN+` for writes, imports, stock, financial, KHY, settings-write, and exports.
+- Add new endpoints in `routes/routes.go` under the correct role group and add them to `routes/permissions_test.go`. Choose the group from the shared role policy, not by read-versus-write.
 - Keep dependency injection explicit through `main.go` and handler constructors; avoid package-level mutable state.
 - Prefer MongoDB transactions for multi-document writes that must stay consistent, especially stock, lots, sales, returns, imports, and movements.
 - Keep response shapes backward-compatible unless the user explicitly asks for a breaking API change.
@@ -72,6 +74,7 @@ Keep this repository layout flat. Do not introduce a nested `app/features/...` a
 - Configuration is loaded through `config/config.go`; trust code over docs when they differ.
 - Required on startup: `SECRET_KEY`, `SYSTEM`.
 - Defaults exist for `MONGO_URI`, `DB_PREFIX`, and `PORT`.
+- `UM_REDIS_HOST` is Um-Api's Redis (`host:port` or `redis://` URL), used read-only. When unset, live verification is disabled with a startup warning; that is for local development only. A Redis outage at startup is logged, not fatal.
 - `DB_NAME` and `UM_API_URL` are not used by current backend logic.
 - `FRONTEND_ORIGIN` is the CORS origin allowlist (comma-separated). When set, the server reflects `Origin` only on match; when unset, it falls back to `Access-Control-Allow-Origin: *` for local-dev convenience. Wire production deployments through this variable so the API isn't callable from arbitrary origins.
 - Do not commit new secrets or depend on local `.env` values as source of truth.
@@ -93,6 +96,7 @@ Keep this repository layout flat. Do not introduce a nested `app/features/...` a
 - Run handler tests: `go test ./handlers`.
 - Run one test: `go test -run TestBuildDrugCreatePayload ./handlers`.
 - Format touched Go files: `gofmt -w <file>`.
+- Identity smoke test (real um-api + pharmacy-api, needs MongoDB and Redis, ~75 s): see `README.md` → Identity smoke test. Run it when changing `middleware/identity.go`, `middleware/auth.go`, route groups, or config; CI runs it on those PRs and nightly against um-api `develop`.
 
 Prefer running the narrowest relevant test first, then broader tests if the change is larger.
 
@@ -123,9 +127,10 @@ Prefer running the narrowest relevant test first, then broader tests if the chan
 - Do not commit generated build outputs unless explicitly requested.
 
 ## Common Pitfalls
-- Do not add HTTP calls to Um-Api for auth; JWT verification is local.
+- Do not authorize a write or sensitive read on JWT claims alone; it must sit behind `live.Require()` so the session is confirmed live.
+- New routes default to `live.Require()`. Put a route in the `RequireOrDegrade` catalog group only if it is an ordinary catalog read: never customer, sale, receipt, KY, financial, user, or settings data.
 - Do not use `time.Local` for reports, receipts, KHY forms, or dashboard date ranges.
 - Do not assume empty barcode or customer phone must be unique; partial indexes intentionally allow multiple empty values.
 - Do not allow stock-changing paths to skip lot, oversell, return, movement, or reconciliation rules.
-- Do not make tests depend on a real MongoDB instance.
+- Do not make `go test` depend on a real MongoDB instance. The identity smoke script (`scripts/identity-smoke/`) is the deliberate exception: it runs outside `go test` and is the cross-service smoke test the architecture notes call for.
 - Do not treat the checked-in `.env` or `pharmacy-server` binary as authoritative source files.
