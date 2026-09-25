@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -232,5 +233,40 @@ func TestNewUMRedisClientAcceptsURL(t *testing.T) {
 	opts := rdb.Options()
 	if opts.Addr != "10.0.0.5:6380" || opts.Password != "secret" || opts.DB != 2 {
 		t.Fatalf("unexpected options addr=%s db=%d", opts.Addr, opts.DB)
+	}
+	if !opts.ContextTimeoutEnabled || opts.ReadTimeout != identityLookupTimeout || opts.MaxRetries > 0 {
+		t.Fatalf("lookup must be bounded: ctxTimeout=%v read=%v retries=%d", opts.ContextTimeoutEnabled, opts.ReadTimeout, opts.MaxRetries)
+	}
+}
+
+// A stalled Redis must fail fast so protected requests get a prompt 503.
+func TestRedisVerifierFailsFastWhenRedisStalls(t *testing.T) {
+	// Accept connections but never answer, like a paused Redis.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+		}
+	}()
+	rdb, _ := NewUMRedisClient(ln.Addr().String())
+	defer rdb.Close()
+
+	start := time.Now()
+	_, err = NewRedisVerifier(rdb).Verify(context.Background(), "s1")
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, ErrUMUnavailable) {
+		t.Fatalf("expected ErrUMUnavailable, got %v", err)
+	}
+	if elapsed > identityLookupTimeout+500*time.Millisecond {
+		t.Fatalf("lookup took %v, want about %v", elapsed, identityLookupTimeout)
 	}
 }
