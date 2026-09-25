@@ -334,32 +334,40 @@ Bootstrap (main.go): `000` ถูก warm-up โดย `CreateIndexesForClient("
 
 ## RBAC (Role-Based Access Control)
 
+ลำดับสิทธิ์ `USER < MANAGER < ADMIN < SUPER` ตาม shared role policy (KMP ADR-0004) — role ที่ไม่รู้จักหรือว่างเข้าไม่ได้ทุก endpoint รายการ route ทั้งหมดพร้อมสิทธิ์ขั้นต่ำอยู่ใน [`routes/permissions_test.go`](routes/permissions_test.go) (test จะ fail ถ้ามี route ที่ไม่ได้กำหนดสิทธิ์)
+
 | Role | สิทธิ์ |
 |------|--------|
-| `SUPER` | ทุกอย่าง |
-| `ADMIN` | จัดการยา, ขาย, รายงาน, นำเข้า, ซัพพลายเออร์, แบบฟอร์ม ขย. |
-| `USER` | ขาย, ดูประวัติ, ดูสต็อก, จัดการลูกค้า (read + add) |
+| `SUPER` | ทุกอย่าง (ใน tenant ของตัวเอง) |
+| `ADMIN` | ทุกอย่างของ MANAGER + แก้ข้อมูล/ราคายา, ยกเลิกทั้งบิล, รายงานการเงิน, แบบฟอร์ม ขย., แก้ settings |
+| `MANAGER` | ทุกอย่างของ USER + ตรวจนับ/ปรับสต็อก/lot, รับสินค้า, ซัพพลายเออร์, แก้ข้อมูลลูกค้า, พิมพ์ label, รายงานยาขายช้า |
+| `USER` | ขาย, คืนยาตามบิล, ดูประวัติ, ดูสต็อก, ลูกค้า (ค้นหา + เพิ่ม) |
 
 ### Endpoints ที่ต้องการ ADMIN หรือ SUPER
 
-- `POST /api/pharmacy/v1/drugs`, `PUT /api/pharmacy/v1/drugs/:id`, `POST /api/pharmacy/v1/drugs/bulk`, `GET /api/pharmacy/v1/drugs/reorder-suggestions`
-- `POST /api/pharmacy/v1/drugs/:id/adjustments`, `POST /api/pharmacy/v1/drugs/:id/lots`, `DELETE /api/pharmacy/v1/drugs/:id/lots/:lot_id`, `POST /api/pharmacy/v1/lots/writeoff`
-- `PUT /api/pharmacy/v1/customers/:id`
+- `POST /api/pharmacy/v1/drugs`, `PUT /api/pharmacy/v1/drugs/:id`, `POST /api/pharmacy/v1/drugs/bulk`
 - `POST /api/pharmacy/v1/sales/:id/void`
-- `GET /api/pharmacy/v1/report/eod`, `GET /api/pharmacy/v1/report/profit`
-- `GET|POST /api/pharmacy/v1/ky9`, `GET|POST /api/pharmacy/v1/ky10`, `GET|POST /api/pharmacy/v1/ky11`, `GET|POST /api/pharmacy/v1/ky12`
-- `/api/pharmacy/v1/imports/*` ทั้งหมด
+- `GET /api/pharmacy/v1/report/summary`, `/dashboard`, `/daily`, `/monthly`, `/top-drugs`, `/eod`, `/profit`
+- `GET|POST /api/pharmacy/v1/ky9`, `GET|POST /api/pharmacy/v1/ky10`, `GET|POST /api/pharmacy/v1/ky11`, `GET|POST /api/pharmacy/v1/ky12`, `GET /api/pharmacy/v1/export/:form`
+- `PUT /api/pharmacy/v1/settings`
+
+### Endpoints ที่ต้องการ MANAGER ขึ้นไป
+
+- `GET /api/pharmacy/v1/drugs/reorder-suggestions`
+- `GET|POST /api/pharmacy/v1/drugs/:id/adjustments`, `GET|POST /api/pharmacy/v1/stock-counts`
+- `POST /api/pharmacy/v1/drugs/:id/lots`, `DELETE /api/pharmacy/v1/drugs/:id/lots/:lot_id`, `POST /api/pharmacy/v1/lots/writeoff`
+- `/api/pharmacy/v1/imports/*` ทั้งหมด (รับสินค้า — `sell_price` ของ lot ไม่เปลี่ยนราคาขายของยา)
 - `/api/pharmacy/v1/suppliers/*` ทั้งหมด
-- `GET /api/pharmacy/v1/export/:form`
+- `PUT /api/pharmacy/v1/customers/:id`
 - `POST /api/pharmacy/v1/labels/print`
+- `GET /api/pharmacy/v1/report/slow-drugs`
 
 ### Endpoints ที่ USER เข้าถึงได้
 
 `GET /api/pharmacy/v1/drugs`, `GET /api/pharmacy/v1/drugs/low-stock`, `GET /api/pharmacy/v1/drugs/:id/lots`, `GET /api/pharmacy/v1/lots/expiring`,
 `GET|POST /api/pharmacy/v1/customers`, `GET /api/pharmacy/v1/customers/:id/sales`,
 `GET|POST /api/pharmacy/v1/sales`, `GET /api/pharmacy/v1/sales/:id/items`, `GET /api/pharmacy/v1/sales/:id/ky`, `POST /api/pharmacy/v1/sales/:id/return`, `GET /api/pharmacy/v1/sales/:id/returns`,
-`GET /api/pharmacy/v1/report/summary`, `GET /api/pharmacy/v1/report/dashboard`, `GET /api/pharmacy/v1/report/daily`, `GET /api/pharmacy/v1/report/monthly`, `GET /api/pharmacy/v1/report/top-drugs`, `GET /api/pharmacy/v1/report/slow-drugs`,
-`GET /api/pharmacy/v1/movements`
+`GET /api/pharmacy/v1/movements`, `GET /api/pharmacy/v1/settings`
 
 ---
 

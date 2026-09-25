@@ -37,11 +37,12 @@ Keep this repository layout flat. Do not introduce a nested `app/features/...` a
 ## Architecture Rules
 - Keep the current flat layout; do not introduce an `app/features/...` structure.
 - API base path is `/api/pharmacy/v1`; routes are auth-protected.
-- Roles are ordered `USER < ADMIN < SUPER`; `RequireRole(min)` allows roles at or above `min`.
+- Roles are ordered `USER < MANAGER < ADMIN < SUPER` (shared role policy, KMP ADR-0004); `RequireRole(min)` allows roles at or above `min`. Every route group names its minimum role, so unknown or empty roles reach nothing.
+- Every route has an entry in `routes/permissions_test.go`; the test fails for an unclassified route. MANAGER+ covers stock counts/adjustments/lots, goods receipt, suppliers, customer edits, labels, and `slow-drugs`; drug identity/price, whole-bill void, reports, KY, and settings writes stay ADMIN+.
 - Handlers should get the tenant from request context via middleware helpers, not from request bodies.
 - Preserve multi-tenant isolation; never hardcode a tenant database except for the existing default tenant behavior.
 - Validate `clientId` consistently with the DB manager rules before constructing database names.
-- Add new endpoints in `routes/routes.go` under the correct role group. Prefer `USER+` only for read/basic workflows and `ADMIN+` for writes, imports, stock, financial, KHY, settings-write, and exports.
+- Add new endpoints in `routes/routes.go` under the correct role group and add them to `routes/permissions_test.go`. Choose the group from the shared role policy, not by read-versus-write.
 - Keep dependency injection explicit through `main.go` and handler constructors; avoid package-level mutable state.
 - Prefer MongoDB transactions for multi-document writes that must stay consistent, especially stock, lots, sales, returns, imports, and movements.
 - Keep response shapes backward-compatible unless the user explicitly asks for a breaking API change.
