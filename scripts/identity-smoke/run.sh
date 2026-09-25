@@ -70,11 +70,18 @@ login() {
     -d "{\"username\":\"$1\",\"password\":\"$PASSWORD\",\"system\":\"PHARMACY\"}" |
     sed -nE 's/.*"accessToken":"([^"]+)".*/\1/p'
 }
-status() { curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $2" "$PH$1"; }
+# check NAME PATH TOKEN WANT_STATUS [MAX_SECONDS]
 check() {
-  local got; got=$(status "$2" "$3")
-  if [ "$got" = "$4" ]; then echo "PASS  $1 → $got"
-  else echo "FAIL  $1 → got $got, want $4"; FAILURES=$((FAILURES + 1)); fi
+  local out got secs
+  out=$(curl -s -o /dev/null -w '%{http_code} %{time_total}' -H "Authorization: Bearer $3" "$PH$2")
+  got=${out% *}; secs=${out#* }
+  if [ "$got" != "$4" ]; then
+    echo "FAIL  $1 → got $got, want $4"; FAILURES=$((FAILURES + 1))
+  elif [ -n "${5:-}" ] && awk "BEGIN{exit !($secs > $5)}"; then
+    echo "FAIL  $1 → $got after ${secs}s, want within ${5}s"; FAILURES=$((FAILURES + 1))
+  else
+    echo "PASS  $1 → $got (${secs}s)"
+  fi
 }
 
 (cd "$HERE/../.." && MONGO_URI="$MONGO_URI" UM_DB=um_smoke go run ./scripts/identity-smoke/seed) || exit 1
@@ -104,9 +111,10 @@ check "new session"                           /settings   "$T" 200
 pause_redis
 check "Redis down, cached answer"             /settings   "$T" 200
 sleep 31
-check "Redis down: sensitive read"            /settings   "$T" 503
-check "Redis down: ADMIN report"              /report/eod "$T" 503
-check "Redis down: catalog read degrades"     /drugs      "$T" 200
+# An outage must answer promptly, not hang each request on Redis timeouts.
+check "Redis down: sensitive read"            /settings   "$T" 503 3
+check "Redis down: ADMIN report"              /report/eod "$T" 503 3
+check "Redis down: catalog read degrades"     /drugs      "$T" 200 3
 resume_redis
 check "Redis back"                            /settings   "$T" 200
 
