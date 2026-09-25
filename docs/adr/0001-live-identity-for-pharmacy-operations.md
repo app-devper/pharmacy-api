@@ -1,0 +1,3 @@
+# Live identity for pharmacy operations
+
+The pharmacy API currently trusts signed JWT role claims for the token's lifetime, while UM revokes sessions and reloads roles immediately on its own requests. Pharmacy writes and sensitive reads must reflect revocation, account deactivation, and role changes within 60 seconds. UM owns a dedicated verification endpoint; this service may cache its result by session ID for at most 30 seconds, checking that the returned user, system, and tenant match the signed token. If verification is unavailable after the cached result expires, it stops confirming protected operations. Ordinary catalog reads may continue under a valid signed token. The services do not share Redis or databases.
