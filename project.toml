@@ -1,0 +1,9 @@
+# Cloud Build deploys with Google's Go buildpack via a pinned builder that
+# ignores go.mod and defaults to a Go line go.dev no longer lists as stable.
+# Pin the minor to match go.mod; the buildpack resolves the latest 1.26 patch.
+[_]
+schema-version = "0.2"
+
+[[io.buildpacks.build.env]]
+name = "GOOGLE_GO_VERSION"
+value = "1.26.*"
