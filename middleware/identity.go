@@ -49,20 +49,32 @@ func NewRedisVerifier(rdb *redis.Client) *RedisVerifier {
 	return &RedisVerifier{rdb: rdb}
 }
 
+// identityLookupTimeout bounds a session lookup, including dial and retry, so
+// a Redis outage turns into a prompt 503 instead of a hung request.
+const identityLookupTimeout = time.Second
+
 // NewUMRedisClient connects to UM's Redis from a host:port or redis:// URL.
 func NewUMRedisClient(host string) (*redis.Client, error) {
+	opts := &redis.Options{Addr: host}
 	if strings.Contains(host, "://") {
-		opts, err := redis.ParseURL(host)
+		parsed, err := redis.ParseURL(host)
 		if err != nil {
 			return nil, err
 		}
-		return redis.NewClient(opts), nil
+		opts = parsed
 	}
-	return redis.NewClient(&redis.Options{Addr: host}), nil
+	// go-redis ignores context deadlines on sockets unless told otherwise and
+	// retries with its own 3-second timeouts; keep a lookup within the bound.
+	opts.ContextTimeoutEnabled = true
+	opts.DialTimeout = identityLookupTimeout
+	opts.ReadTimeout = identityLookupTimeout
+	opts.WriteTimeout = identityLookupTimeout
+	opts.MaxRetries = -1
+	return redis.NewClient(opts), nil
 }
 
 func (v *RedisVerifier) Verify(ctx context.Context, sessionID string) (Identity, error) {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, identityLookupTimeout)
 	defer cancel()
 	raw, err := v.rdb.Get(ctx, "session:"+sessionID).Result()
 	if errors.Is(err, redis.Nil) {
