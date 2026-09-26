@@ -2,30 +2,29 @@ package middleware
 
 import (
 	"context"
-	"errors"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
+	"github.com/app-devper/um-api/sessionclient"
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// Caching, system binding, and the Redis reader are tested in um-api's
+// sessionclient module; these tests cover the pharmacy's route policy.
+
 const testSecret = "test-secret"
 
-type fakeSessions struct {
-	identity Identity
-	err      error
-	calls    int
-	asked    string
+type fakeStore struct {
+	session sessionclient.Session
+	err     error
+	asked   string
 }
 
-func (f *fakeSessions) Verify(_ context.Context, sessionID string) (Identity, error) {
-	f.calls++
+func (f *fakeStore) Session(_ context.Context, sessionID string) (sessionclient.Session, error) {
 	f.asked = sessionID
-	return f.identity, f.err
+	return f.session, f.err
 }
 
 func signedToken(t *testing.T, sessionID, role, clientID string) string {
@@ -45,29 +44,13 @@ func signedToken(t *testing.T, sessionID, role, clientID string) string {
 	return token
 }
 
-type liveHarness struct {
-	live     *LiveIdentity
-	sessions *fakeSessions
-	clock    time.Time
-}
-
-func newLiveHarness() *liveHarness {
-	h := &liveHarness{
-		sessions: &fakeSessions{identity: Identity{UserId: "u1", System: "PHARMACY"}},
-		clock:    time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC),
-	}
-	h.live = NewLiveIdentity(h.sessions)
-	h.live.now = func() time.Time { return h.clock }
-	return h
-}
-
 // serve runs RequireAuth → live check → handler, returning the status and
 // the role the handler saw.
-func (h *liveHarness) serve(t *testing.T, token string, degradable bool) (int, string) {
+func serve(t *testing.T, live *LiveIdentity, degradable bool) (int, string) {
 	t.Helper()
-	check := h.live.Require()
+	check := live.Require()
 	if degradable {
-		check = h.live.RequireOrDegrade()
+		check = live.RequireOrDegrade()
 	}
 	var seenRole string
 	handler := RequireAuth(testSecret, "PHARMACY")(check(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -75,198 +58,54 @@ func (h *liveHarness) serve(t *testing.T, token string, degradable bool) (int, s
 		w.WriteHeader(http.StatusOK)
 	})))
 	req := httptest.NewRequest(http.MethodGet, "/api/pharmacy/v1/sales", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", "Bearer "+signedToken(t, "s1", "ADMIN", "123"))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	return rec.Code, seenRole
 }
 
+func liveWith(store *fakeStore) *LiveIdentity {
+	return NewLiveIdentity(sessionclient.NewChecker(store))
+}
+
 func TestLiveSessionAuthorizesTokenClaims(t *testing.T) {
-	h := newLiveHarness()
-
-	code, role := h.serve(t, signedToken(t, "s1", "ADMIN", "123"), false)
-
-	if code != http.StatusOK || role != "ADMIN" {
-		t.Fatalf("expected 200 with token role ADMIN, got %d role=%q", code, role)
-	}
-	if h.sessions.asked != "s1" {
-		t.Fatalf("expected lookup of the token's session, got %q", h.sessions.asked)
+	store := &fakeStore{session: sessionclient.Session{UserId: "u1", System: "PHARMACY"}}
+	code, role := serve(t, liveWith(store), false)
+	if code != http.StatusOK || role != "ADMIN" || store.asked != "s1" {
+		t.Fatalf("expected 200 as ADMIN for session s1, got %d %q asked=%q", code, role, store.asked)
 	}
 }
 
-func TestLiveIdentityCachesForAtMost30Seconds(t *testing.T) {
-	h := newLiveHarness()
-	token := signedToken(t, "s1", "ADMIN", "123")
-
-	h.serve(t, token, false)
-	h.clock = h.clock.Add(IdentityTTL - time.Second)
-	h.serve(t, token, false)
-	if h.sessions.calls != 1 {
-		t.Fatalf("expected cached answer within TTL, got %d lookups", h.sessions.calls)
-	}
-
-	h.clock = h.clock.Add(time.Second)
-	h.serve(t, token, false)
-	if h.sessions.calls != 2 {
-		t.Fatalf("expected a new lookup after %v, got %d", IdentityTTL, h.sessions.calls)
+func TestRevokedSessionIsRefusedEverywhere(t *testing.T) {
+	store := &fakeStore{err: sessionclient.ErrSessionRejected}
+	for _, degradable := range []bool{false, true} {
+		if code, _ := serve(t, liveWith(store), degradable); code != http.StatusUnauthorized {
+			t.Fatalf("degradable=%v: expected 401, got %d", degradable, code)
+		}
 	}
 }
 
-func TestLiveIdentityRevocationTakesEffectAfterCacheExpires(t *testing.T) {
-	h := newLiveHarness()
-	token := signedToken(t, "s1", "ADMIN", "123")
-	h.serve(t, token, false)
-
-	h.sessions.err = ErrSessionRejected
-	h.clock = h.clock.Add(IdentityTTL)
-
-	if code, _ := h.serve(t, token, false); code != http.StatusUnauthorized {
-		t.Fatalf("expected 401 once the session is gone, got %d", code)
-	}
-	if code, _ := h.serve(t, token, true); code != http.StatusUnauthorized {
-		t.Fatalf("catalog reads must also stop for a revoked session, got %d", code)
-	}
-}
-
-func TestLiveIdentityRejectsSessionFromAnotherSystem(t *testing.T) {
-	h := newLiveHarness()
-	h.sessions.identity.System = "POS"
-
-	if code, _ := h.serve(t, signedToken(t, "s1", "ADMIN", "123"), false); code != http.StatusUnauthorized {
+func TestSessionFromAnotherSystemIsRefused(t *testing.T) {
+	store := &fakeStore{session: sessionclient.Session{UserId: "u1", System: "POS"}}
+	if code, _ := serve(t, liveWith(store), false); code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 for a session issued to another system, got %d", code)
 	}
 }
 
-func TestLiveIdentityAcceptsLegacySessionWithoutSystem(t *testing.T) {
-	h := newLiveHarness()
-	h.sessions.identity.System = ""
-
-	if code, _ := h.serve(t, signedToken(t, "s1", "ADMIN", "123"), false); code != http.StatusOK {
-		t.Fatalf("expected legacy session without system to pass, got %d", code)
+func TestOutageBlocksProtectedRoutesButNotCatalog(t *testing.T) {
+	store := &fakeStore{err: sessionclient.ErrUnavailable}
+	if code, _ := serve(t, liveWith(store), false); code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 on a protected route, got %d", code)
+	}
+	if code, _ := serve(t, liveWith(store), true); code != http.StatusOK {
+		t.Fatalf("expected catalog read to degrade to 200, got %d", code)
 	}
 }
 
-func TestLiveIdentityOutageBlocksProtectedOperationsButNotCatalog(t *testing.T) {
-	h := newLiveHarness()
-	h.sessions.err = ErrUMUnavailable
-	token := signedToken(t, "s1", "USER", "123")
-
-	if code, _ := h.serve(t, token, false); code != http.StatusServiceUnavailable {
-		t.Fatalf("expected 503 for protected operation during outage, got %d", code)
-	}
-	code, role := h.serve(t, token, true)
-	if code != http.StatusOK || role != "USER" {
-		t.Fatalf("expected catalog read under signed token, got %d role=%q", code, role)
-	}
-}
-
-func TestLiveIdentityServesFromCacheDuringShortOutage(t *testing.T) {
-	h := newLiveHarness()
-	token := signedToken(t, "s1", "USER", "123")
-	h.serve(t, token, false)
-
-	h.sessions.err = ErrUMUnavailable
-	h.clock = h.clock.Add(IdentityTTL / 2)
-	if code, _ := h.serve(t, token, false); code != http.StatusOK {
-		t.Fatalf("expected cached answer to cover a short outage, got %d", code)
-	}
-
-	h.clock = h.clock.Add(IdentityTTL)
-	if code, _ := h.serve(t, token, false); code != http.StatusServiceUnavailable {
-		t.Fatalf("expected 503 once the cached answer expires, got %d", code)
-	}
-}
-
-func TestLiveIdentityDisabledWithoutVerifier(t *testing.T) {
-	h := newLiveHarness()
-	h.live = NewLiveIdentity(nil)
-	code, role := h.serve(t, signedToken(t, "s1", "USER", "123"), false)
-	if code != http.StatusOK || role != "USER" {
-		t.Fatalf("expected passthrough, got %d role=%q", code, role)
-	}
-}
-
-// The key and JSON shape mirror um-api's session storage contract (UM ADR-0003).
-func TestRedisVerifierReadsUMSessionKeys(t *testing.T) {
-	mr := miniredis.RunT(t)
-	rdb, err := NewUMRedisClient(mr.Addr())
-	if err != nil {
-		t.Fatalf("client: %v", err)
-	}
-	defer rdb.Close()
-	v := NewRedisVerifier(rdb)
-	ctx := context.Background()
-
-	mr.Set("session:s1", `{"userId":"u1","createdAt":"2026-09-25T10:00:00Z","system":"PHARMACY"}`)
-	id, err := v.Verify(ctx, "s1")
-	if err != nil || id != (Identity{UserId: "u1", System: "PHARMACY"}) {
-		t.Fatalf("unexpected identity %+v err=%v", id, err)
-	}
-
-	if _, err := v.Verify(ctx, "missing"); !errors.Is(err, ErrSessionRejected) {
-		t.Fatalf("missing session: expected ErrSessionRejected, got %v", err)
-	}
-
-	mr.Set("session:bad", `not json`)
-	if _, err := v.Verify(ctx, "bad"); !errors.Is(err, ErrUMUnavailable) {
-		t.Fatalf("unreadable session: expected ErrUMUnavailable, got %v", err)
-	}
-
-	mr.SetError("LOADING")
-	if _, err := v.Verify(ctx, "s1"); !errors.Is(err, ErrUMUnavailable) {
-		t.Fatalf("redis error: expected ErrUMUnavailable, got %v", err)
-	}
-	mr.SetError("")
-
-	mr.Close()
-	if _, err := v.Verify(ctx, "s1"); !errors.Is(err, ErrUMUnavailable) {
-		t.Fatalf("unreachable redis: expected ErrUMUnavailable, got %v", err)
-	}
-}
-
-func TestNewUMRedisClientAcceptsURL(t *testing.T) {
-	rdb, err := NewUMRedisClient("redis://:secret@10.0.0.5:6380/2")
-	if err != nil {
-		t.Fatalf("parse url: %v", err)
-	}
-	defer rdb.Close()
-	opts := rdb.Options()
-	if opts.Addr != "10.0.0.5:6380" || opts.Password != "secret" || opts.DB != 2 {
-		t.Fatalf("unexpected options addr=%s db=%d", opts.Addr, opts.DB)
-	}
-	if !opts.ContextTimeoutEnabled || opts.ReadTimeout != identityLookupTimeout || opts.MaxRetries > 0 {
-		t.Fatalf("lookup must be bounded: ctxTimeout=%v read=%v retries=%d", opts.ContextTimeoutEnabled, opts.ReadTimeout, opts.MaxRetries)
-	}
-}
-
-// A stalled Redis must fail fast so protected requests get a prompt 503.
-func TestRedisVerifierFailsFastWhenRedisStalls(t *testing.T) {
-	// Accept connections but never answer, like a paused Redis.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	defer ln.Close()
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			defer conn.Close()
+func TestDisabledCheckPassesThrough(t *testing.T) {
+	for _, live := range []*LiveIdentity{NewLiveIdentity(nil), nil} {
+		if code, _ := serve(t, live, false); code != http.StatusOK {
+			t.Fatalf("expected passthrough, got %d", code)
 		}
-	}()
-	rdb, _ := NewUMRedisClient(ln.Addr().String())
-	defer rdb.Close()
-
-	start := time.Now()
-	_, err = NewRedisVerifier(rdb).Verify(context.Background(), "s1")
-	elapsed := time.Since(start)
-
-	if !errors.Is(err, ErrUMUnavailable) {
-		t.Fatalf("expected ErrUMUnavailable, got %v", err)
-	}
-	if elapsed > identityLookupTimeout+500*time.Millisecond {
-		t.Fatalf("lookup took %v, want about %v", elapsed, identityLookupTimeout)
 	}
 }
