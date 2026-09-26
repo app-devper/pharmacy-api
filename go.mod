@@ -3,7 +3,7 @@ module pharmacy-pos/backend
 go 1.26.0
 
 require (
-	github.com/app-devper/um-api/sessionclient v0.0.0-20260925175614-bd098c4b58fe
+	github.com/app-devper/um-api/sessionclient v0.1.0
 	github.com/boombuler/barcode v1.0.2
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/golang-jwt/jwt/v5 v5.3.1
