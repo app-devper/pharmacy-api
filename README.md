@@ -80,7 +80,7 @@ UM_REDIS_HOST=localhost:6379
 
 > **SECRET_KEY** ต้องตรงกับค่าที่ใช้ใน Um-Api เพื่อ verify JWT token
 >
-> **UM_REDIS_HOST** — Redis ของ Um-Api (ตัวเดียวกับ `REDIS_HOST` ของ Um-Api) รูปแบบ `host:port` หรือ `redis://[:password@]host:port[/db]` ใช้อ่าน `session:<jti>` เพื่อตรวจ session แบบ live (ADR-0004) ใช้สิทธิ์อ่านอย่างเดียว บน Cloud Run ต้องต่อผ่าน VPC connector ไปยัง Memorystore **ถ้าไม่ตั้ง** การตรวจ live จะปิด และ session ที่ถูก revoke ยังใช้ได้จน token หมดอายุ — ใช้ได้เฉพาะ local development
+> **UM_REDIS_HOST** — Redis ของ Um-Api (ตัวเดียวกับ `REDIS_HOST` ของ Um-Api) รูปแบบ `host:port` หรือ `redis://[:password@]host:port[/db]` ใช้อ่าน `session:<jti>` เพื่อตรวจ session แบบ live (ADR-0004) ใช้สิทธิ์อ่านอย่างเดียว บน Cloud Run ต้องต่อผ่าน VPC connector ไปยัง Memorystore **ต้องตั้งเสมอ** ถ้าไม่ตั้ง API จะไม่ start (um-api ADR-0005) — local development ให้ชี้ไปที่ Redis ในเครื่อง
 >
 > **UM_API_URL** — ยังไม่ถูกใช้ใน backend
 >

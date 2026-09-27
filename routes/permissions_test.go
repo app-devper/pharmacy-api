@@ -5,13 +5,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/golang-jwt/jwt/v5"
-
-	"pharmacy-pos/backend/handlers"
-	mw "pharmacy-pos/backend/middleware"
 )
 
 // minimumRole is the shared role policy (KMP ADR-0004) route by route. Every
@@ -95,15 +90,8 @@ func rank(role string) int {
 }
 
 func TestEveryRouteEnforcesItsMinimumRole(t *testing.T) {
-	// Live identity disabled: this test is only about role permissions.
-	r := Setup(
-		&handlers.DrugHandler{}, &handlers.DrugLotHandler{}, &handlers.CustomerHandler{},
-		&handlers.SaleHandler{}, &handlers.ReportHandler{}, &handlers.KyHandler{},
-		&handlers.ExportHandler{}, &handlers.ImportHandler{}, &handlers.SupplierHandler{},
-		&handlers.StockAdjustmentHandler{}, &handlers.StockCountHandler{}, &handlers.ReturnHandler{},
-		&handlers.MovementsHandler{}, &handlers.SettingsHandler{}, &handlers.LabelHandler{},
-		"test-secret", "PHARMACY", nil, "", mw.NewLiveIdentity(nil),
-	)
+	// UM confirms every session: this test is only about role permissions.
+	r := setupRouter(t, liveUM{})
 
 	registered := map[string]bool{}
 	err := chi.Walk(r, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
@@ -114,7 +102,7 @@ func TestEveryRouteEnforcesItsMinimumRole(t *testing.T) {
 			t.Errorf("%s has no entry in minimumRole; decide its permission", key)
 			return nil
 		}
-		path := strings.NewReplacer("{id}", "0123456789abcdef01234567", "{lot_id}", "0123456789abcdef01234567", "{form}", "ky9").Replace(route)
+		path := samplePath(route)
 		for _, role := range append(roleOrder, "CASHIER") {
 			code := serveAs(t, r, method, path, role)
 			allowed := rank(role) >= rank(minimum) && rank(role) >= 0
@@ -142,13 +130,7 @@ func TestEveryRouteEnforcesItsMinimumRole(t *testing.T) {
 // status; that is enough to tell allowed from denied.
 func serveAs(t *testing.T, r http.Handler, method, path, role string) int {
 	t.Helper()
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, &mw.AccessClaims{
-		Role: role, System: "PHARMACY", ClientId: "123",
-		RegisteredClaims: jwt.RegisteredClaims{ID: "s1", ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour))},
-	}).SignedString([]byte("test-secret"))
-	if err != nil {
-		t.Fatalf("sign: %v", err)
-	}
+	token := signedToken(t, role)
 	req := httptest.NewRequest(method, path, strings.NewReader("{}"))
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
