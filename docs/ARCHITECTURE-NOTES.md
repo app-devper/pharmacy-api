@@ -17,3 +17,5 @@ These notes trace the agreed cross-repository design to this service. They descr
 Sensitive reads include customer-identifying data, sale history and bill items, customer-bearing receipts, KY, financial reports, user data, and business-rule settings. Ordinary catalog reads may continue with a valid signed token during a UM outage. The five report routes `summary`, `dashboard`, `daily`, `monthly`, and `top-drugs` are ADMIN+ targets; `slow-drugs` is MANAGER+.
 
 [AGENTS.md](../AGENTS.md) describes live UM verification and the four-role permission split.
+
+Inventory: every stock change runs in the [inventory module](../inventory/) (ADR-0007); `GET /inventory/drift` lists lot-tracked drugs whose stock and lots disagree.

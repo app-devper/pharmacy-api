@@ -12,6 +12,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
+	"pharmacy-pos/backend/inventory"
 	"pharmacy-pos/backend/models"
 )
 
@@ -192,18 +193,7 @@ func recordReturn(ctx context.Context, mdb *db.MongoDB, oid bson.ObjectID, input
 				CostSubtotal: costSubtotal,
 			})
 
-			updateRes, err := mdb.Drugs().UpdateOne(txCtx,
-				bson.M{"_id": si.DrugID},
-				bson.M{"$inc": bson.M{"stock": inp.Qty}},
-			)
-			if err != nil {
-				return err
-			}
-			if updateRes.MatchedCount == 0 {
-				return mongo.ErrNoDocuments
-			}
-
-			if err := restoreSaleItemLots(txCtx, mdb, si, inp.Qty, currentReturned[inp.SaleItemID]); err != nil {
+			if err := inventory.GiveBack(txCtx, mdb, si, inp.Qty, currentReturned[inp.SaleItemID]); err != nil {
 				return err
 			}
 		}

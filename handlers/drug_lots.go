@@ -4,17 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"go.mongodb.org/mongo-driver/v2/bson"
-	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
+	"pharmacy-pos/backend/inventory"
 	mw "pharmacy-pos/backend/middleware"
 	"pharmacy-pos/backend/models"
 )
@@ -61,43 +60,13 @@ func (h *DrugLotHandler) ListLots(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, lots)
 }
 
-// AddLot creates a new lot and increments drug.stock by lot.Quantity.
+// AddLot receives a lot entered by hand (inventory: also settles oversold stock).
 func (h *DrugLotHandler) AddLot(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	drugOID, err := bson.ObjectIDFromHex(id)
-	if err != nil {
-		jsonError(w, "invalid drug id", http.StatusBadRequest)
-		return
-	}
-
 	var input models.DrugLotInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		jsonError(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	if input.LotNumber == "" {
-		jsonError(w, "lot_number is required", http.StatusBadRequest)
-		return
-	}
-	if input.Quantity <= 0 {
-		jsonError(w, "quantity must be > 0", http.StatusBadRequest)
-		return
-	}
-	if input.ExpiryDate == "" {
-		jsonError(w, "expiry_date is required", http.StatusBadRequest)
-		return
-	}
-	if _, err := time.Parse("2006-01-02", input.ExpiryDate); err != nil {
-		jsonError(w, "expiry_date must be YYYY-MM-DD", http.StatusBadRequest)
-		return
-	}
-	if input.ImportDate != "" {
-		if _, err := time.Parse("2006-01-02", input.ImportDate); err != nil {
-			jsonError(w, "import_date must be YYYY-MM-DD", http.StatusBadRequest)
-			return
-		}
-	}
-
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
 		jsonError(w, "unauthorized client", http.StatusForbidden)
@@ -106,60 +75,11 @@ func (h *DrugLotHandler) AddLot(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	tz := mdb.Timezone(ctx)
-	expiry, _ := time.ParseInLocation("2006-01-02", input.ExpiryDate, tz)
-
-	importDate := time.Now()
-	if input.ImportDate != "" {
-		importDate, _ = time.ParseInLocation("2006-01-02", input.ImportDate, tz)
-	}
-
-	var drug models.Drug
-	if err := mdb.Drugs().FindOne(ctx, bson.M{"_id": drugOID}).Decode(&drug); err != nil {
-		jsonError(w, "drug not found", http.StatusNotFound)
+	lot, err := inventory.AddLot(ctx, mdb, chi.URLParam(r, "id"), input)
+	if err != nil {
+		writeCommandError(w, err)
 		return
 	}
-
-	lot := models.DrugLot{
-		DrugID:     drugOID,
-		DrugName:   drug.Name,
-		LotNumber:  input.LotNumber,
-		ExpiryDate: expiry,
-		ImportDate: importDate,
-		CostPrice:  input.CostPrice,
-		SellPrice:  input.SellPrice,
-		Quantity:   input.Quantity,
-		Remaining:  input.Quantity, // starts equal to quantity
-		CreatedAt:  time.Now(),
-	}
-
-	if err := mdb.WithTransaction(ctx, func(txCtx context.Context) error {
-		res, err := mdb.DrugLots().InsertOne(txCtx, lot)
-		if err != nil {
-			return err
-		}
-		lot.ID = res.InsertedID.(bson.ObjectID)
-
-		updateRes, err := mdb.Drugs().UpdateOne(txCtx,
-			bson.M{"_id": drugOID},
-			bson.M{"$inc": bson.M{"stock": input.Quantity}},
-		)
-		if err != nil {
-			return err
-		}
-		if updateRes.MatchedCount == 0 {
-			return mongo.ErrNoDocuments
-		}
-		return nil
-	}); err != nil {
-		if errors.Is(err, mongo.ErrNoDocuments) {
-			jsonError(w, "drug not found", http.StatusNotFound)
-			return
-		}
-		jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
 	jsonOK(w, lot)
 }
 
@@ -190,12 +110,14 @@ func (h *DrugLotHandler) Expiring(w http.ResponseWriter, r *http.Request) {
 		filter = bson.M{
 			"expiry_date": bson.M{"$lt": now},
 			"remaining":   bson.M{"$gt": 0},
+			"no_expiry":   bson.M{"$ne": true},
 		}
 	} else {
 		threshold := now.AddDate(0, 0, days)
 		filter = bson.M{
 			"expiry_date": bson.M{"$lte": threshold},
 			"remaining":   bson.M{"$gt": 0},
+			"no_expiry":   bson.M{"$ne": true},
 		}
 	}
 
@@ -236,7 +158,7 @@ func (h *DrugLotHandler) Expiring(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, result)
 }
 
-// WriteoffLots bulk-deletes a set of lots and decrements each drug's stock accordingly.
+// WriteoffLots writes off every listed lot or none (inventory, ADR-0007).
 // POST /api/pharmacy/v1/lots/writeoff   body: {"lot_ids": ["<hex>", ...]}
 func (h *DrugLotHandler) WriteoffLots(w http.ResponseWriter, r *http.Request) {
 	var input struct {
@@ -246,7 +168,6 @@ func (h *DrugLotHandler) WriteoffLots(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "lot_ids required", http.StatusBadRequest)
 		return
 	}
-
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
 		jsonError(w, "unauthorized client", http.StatusForbidden)
@@ -255,98 +176,27 @@ func (h *DrugLotHandler) WriteoffLots(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	writtenOff := 0
-	failures := make([]map[string]string, 0)
-	for _, rawID := range input.LotIDs {
-		lotOID, err := bson.ObjectIDFromHex(rawID)
-		if err != nil {
-			failures = append(failures, map[string]string{
-				"lot_id": rawID,
-				"error":  "invalid lot id",
-			})
-			continue
-		}
-
-		if err := mdb.WithTransaction(ctx, func(txCtx context.Context) error {
-			var lot models.DrugLot
-			if err := mdb.DrugLots().FindOne(txCtx, bson.M{"_id": lotOID}).Decode(&lot); err != nil {
-				return err
-			}
-
-			res, err := mdb.DrugLots().DeleteOne(txCtx, bson.M{"_id": lotOID})
-			if err != nil {
-				return err
-			}
-			if res.DeletedCount == 0 {
-				return fmt.Errorf("lot already removed")
-			}
-
-			if lot.Remaining > 0 {
-				updateRes, err := mdb.Drugs().UpdateOne(txCtx,
-					bson.M{"_id": lot.DrugID},
-					bson.M{"$inc": bson.M{"stock": -lot.Remaining}},
-				)
-				if err != nil {
-					return err
-				}
-				if updateRes.MatchedCount == 0 {
-					return mongo.ErrNoDocuments
-				}
-			}
-
-			_, err = mdb.LotWriteoffs().InsertOne(txCtx, models.LotWriteoff{
-				ID:         bson.NewObjectID(),
-				DrugID:     lot.DrugID,
-				DrugName:   lot.DrugName,
-				LotNumber:  lot.LotNumber,
-				ExpiryDate: lot.ExpiryDate,
-				Qty:        lot.Remaining,
-				CreatedAt:  time.Now(),
-			})
-			return err
-		}); err != nil {
-			msg := err.Error()
-			if errors.Is(err, mongo.ErrNoDocuments) {
-				msg = "lot not found"
-			}
-			failures = append(failures, map[string]string{
-				"lot_id": rawID,
-				"error":  msg,
-			})
-			continue
-		}
-
-		writtenOff++
+	n, err := inventory.WriteOff(ctx, mdb, input.LotIDs)
+	var lotErr *inventory.WriteOffError
+	if errors.As(err, &lotErr) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"written_off": 0,
+			"failed":      []map[string]string{{"lot_id": lotErr.LotID, "error": lotErr.Error()}},
+		})
+		return
 	}
-
-	status := http.StatusOK
-	if len(failures) > 0 {
-		status = http.StatusConflict
+	if err != nil {
+		writeCommandError(w, err)
+		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"written_off": writtenOff,
-		"failed":      failures,
-	})
+	jsonOK(w, map[string]interface{}{"written_off": n, "failed": []map[string]string{}})
 }
 
-// DeleteLot removes a lot and decrements drug.stock by lot.Remaining.
+// DeleteLot removes a lot entered by mistake; a lot already sold from must be
+// written off instead (409).
 func (h *DrugLotHandler) DeleteLot(w http.ResponseWriter, r *http.Request) {
-	drugID := chi.URLParam(r, "id")
-	lotID := chi.URLParam(r, "lot_id")
-
-	drugOID, err := bson.ObjectIDFromHex(drugID)
-	if err != nil {
-		jsonError(w, "invalid drug id", http.StatusBadRequest)
-		return
-	}
-	lotOID, err := bson.ObjectIDFromHex(lotID)
-	if err != nil {
-		jsonError(w, "invalid lot id", http.StatusBadRequest)
-		return
-	}
-
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
 		jsonError(w, "unauthorized client", http.StatusForbidden)
@@ -355,44 +205,28 @@ func (h *DrugLotHandler) DeleteLot(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	// Fetch lot to get remaining quantity before deleting
-	var lot models.DrugLot
-	err = mdb.DrugLots().FindOne(ctx, bson.M{"_id": lotOID, "drug_id": drugOID}).Decode(&lot)
-	if err != nil {
-		jsonError(w, "lot not found", http.StatusNotFound)
+	if err := inventory.DeleteLot(ctx, mdb, chi.URLParam(r, "id"), chi.URLParam(r, "lot_id")); err != nil {
+		writeCommandError(w, err)
 		return
 	}
-
-	// Delete lot + decrement stock atomically
-	if err := mdb.WithTransaction(ctx, func(txCtx context.Context) error {
-		res, err := mdb.DrugLots().DeleteOne(txCtx, bson.M{"_id": lotOID})
-		if err != nil {
-			return err
-		}
-		if res.DeletedCount == 0 {
-			return mongo.ErrNoDocuments
-		}
-		if lot.Remaining > 0 {
-			updateRes, err := mdb.Drugs().UpdateOne(txCtx,
-				bson.M{"_id": drugOID},
-				bson.M{"$inc": bson.M{"stock": -lot.Remaining}},
-			)
-			if err != nil {
-				return err
-			}
-			if updateRes.MatchedCount == 0 {
-				return mongo.ErrNoDocuments
-			}
-		}
-		return nil
-	}); err != nil {
-		if errors.Is(err, mongo.ErrNoDocuments) {
-			jsonError(w, "lot not found", http.StatusNotFound)
-			return
-		}
-		jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
 	jsonOK(w, map[string]bool{"ok": true})
+}
+
+// Drift lists lot-tracked drugs whose stock and lots disagree (read-only).
+// GET /api/pharmacy/v1/inventory/drift
+func (h *DrugLotHandler) Drift(w http.ResponseWriter, r *http.Request) {
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	rows, err := inventory.Drift(ctx, mdb)
+	if err != nil {
+		writeCommandError(w, err)
+		return
+	}
+	jsonOK(w, rows)
 }

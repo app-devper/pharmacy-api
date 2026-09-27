@@ -4,31 +4,27 @@
 // handlers only decode requests and render outcomes.
 package sales
 
-import "errors"
+import (
+	"errors"
 
-// Kind classifies a refusal so a caller can choose a status.
-type Kind int
-
-const (
-	// Invalid: the request cannot succeed as sent (400).
-	Invalid Kind = iota + 1
-	// NotFound: the referenced sale does not exist (404).
-	NotFound
-	// Conflict: the request conflicts with recorded state (409).
-	Conflict
+	"pharmacy-pos/backend/refusal"
 )
 
-// Error is a refusal the caller can show. Any other error is unexpected.
-type Error struct {
-	Kind Kind
-	Msg  string
-}
+// Refusals are shared with the inventory module (package refusal).
+type (
+	Kind  = refusal.Kind
+	Error = refusal.Error
+)
 
-func (e *Error) Error() string { return e.Msg }
+const (
+	Invalid  = refusal.Invalid
+	NotFound = refusal.NotFound
+	Conflict = refusal.Conflict
+)
 
-func invalid(msg string) error  { return &Error{Kind: Invalid, Msg: msg} }
-func notFound(msg string) error { return &Error{Kind: NotFound, Msg: msg} }
-func conflict(msg string) error { return &Error{Kind: Conflict, Msg: msg} }
+func invalid(msg string) error  { return refusal.Invalidf(msg) }
+func notFound(msg string) error { return refusal.NotFoundf(msg) }
+func conflict(msg string) error { return refusal.Conflictf(msg) }
 
 // ErrRequestReused: a client request id already confirmed a different
 // command. The original is kept; the new one is refused.

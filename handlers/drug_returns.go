@@ -39,7 +39,7 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	out, replayed, err := sales.Return(ctx, mdb, chi.URLParam(r, "id"), input)
 	if err != nil {
-		writeSalesError(w, err)
+		writeCommandError(w, err)
 		return
 	}
 	markReplayed(w, replayed)
