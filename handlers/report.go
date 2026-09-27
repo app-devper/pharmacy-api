@@ -175,7 +175,7 @@ func (h *ReportHandler) Eod(w http.ResponseWriter, r *http.Request) {
 
 	day, err := sales.Day(ctx, mdb, r.URL.Query().Get("date"))
 	if err != nil {
-		writeSalesError(w, err)
+		writeCommandError(w, err)
 		return
 	}
 	jsonOK(w, day)
@@ -201,7 +201,7 @@ func (h *ReportHandler) CloseEod(w http.ResponseWriter, r *http.Request) {
 
 	closed, replayed, err := sales.Close(ctx, mdb, strings.TrimSpace(body.Date), strings.TrimSpace(body.ClosedByName))
 	if err != nil {
-		writeSalesError(w, err)
+		writeCommandError(w, err)
 		return
 	}
 	markReplayed(w, replayed)

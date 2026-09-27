@@ -15,6 +15,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
+	"pharmacy-pos/backend/inventory"
 	mw "pharmacy-pos/backend/middleware"
 	"pharmacy-pos/backend/models"
 )
@@ -319,33 +320,12 @@ func (h *ImportHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 				Remaining:  item.Qty,
 				CreatedAt:  now,
 			}
-			lotRes, err := mdb.DrugLots().InsertOne(txCtx, lot)
-			if err != nil {
-				return fmt.Errorf("lot insert failed for %s: %w", item.DrugName, err)
-			}
-			if oid, ok := lotRes.InsertedID.(bson.ObjectID); ok {
-				lot.ID = oid
-			}
-
-			stockRes, err := mdb.Drugs().UpdateOne(txCtx,
-				bson.M{"_id": item.DrugID},
-				bson.M{"$inc": bson.M{"stock": item.Qty}},
-			)
-			if err != nil {
-				return fmt.Errorf("stock update failed: %w", err)
-			}
-			if stockRes.MatchedCount == 0 {
-				return fmt.Errorf("drug not found for %s", item.DrugName)
-			}
-
-			// Oversell reconciliation — absorb any pending "sell now, reconcile
-			// later" debts against this new lot. Walks prior SaleItems with
-			// oversold_qty > 0 in sale order and backfills their LotSplits.
-			// drug.stock is intentionally NOT touched: the oversold sale
-			// already decremented it; the +qty above brings the books to the
-			// correct net position.
-			if err := reconcileOversold(txCtx, mdb, item.DrugID, lot); err != nil {
-				return fmt.Errorf("oversold reconcile failed for %s: %w", item.DrugName, err)
+			// Receiving the lot adds its stock and settles oversold sales from it.
+			if _, err := inventory.ReceiveLot(txCtx, mdb, lot); err != nil {
+				if errors.Is(err, mongo.ErrNoDocuments) {
+					return fmt.Errorf("drug not found for %s", item.DrugName)
+				}
+				return fmt.Errorf("receive lot failed for %s: %w", item.DrugName, err)
 			}
 
 			var drug models.Drug

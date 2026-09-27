@@ -49,8 +49,7 @@ Keep this repository layout flat. Do not introduce a nested `app/features/...` a
 - Return JSON error responses in the style used by adjacent handlers rather than introducing a new error envelope.
 
 ## Domain Invariants
-- Preserve stock consistency: `drug.stock ≈ sum(lot.remaining) - sum(oversold_qty)`.
-- Follow existing reconcile helpers for stock, lots, sales, returns, and oversell behavior instead of creating parallel logic.
+- Every stock change goes through the `inventory` package (ADR-0007), which keeps `drug.stock = sum(lot.remaining) - sum(oversold_qty)` for lot-tracked drugs and writes the audit record. Never `$inc`/`$set` `drugs.stock` or lot `remaining` from a handler, and never delete a lot a sale has taken from (write it off).
 - Respect FEFO behavior when changing sales or stock depletion paths.
 - Synthetic `ADJUST:` lot quantities are not returnable as real sale lots.
 - Use the existing timezone helper for date math; do not rely on `time.Local`.
@@ -100,7 +99,7 @@ Keep this repository layout flat. Do not introduce a nested `app/features/...` a
 Prefer running the narrowest relevant test first, then broader tests if the change is larger.
 
 ## Testing Guidance
-- Prefer unit tests; do not add testcontainers or tests requiring a real MongoDB unless explicitly requested.
+- Prefer unit tests. The `sales` and `inventory` packages have integration tests against a MongoDB replica set; they skip unless `MONGO_TEST_URI` is set (e.g. `mongodb://localhost:27017/?replicaSet=rs0&directConnection=true`), and CI starts one. Add Mongo-backed tests only there, and do not add testcontainers.
 - Follow existing isolated handler test patterns, such as payload validation tests.
 - Bulk import behavior intentionally differs from single-drug create; do not “fix” that asymmetry unless requested.
 - For non-trivial backend changes, run `go test ./...` when practical.

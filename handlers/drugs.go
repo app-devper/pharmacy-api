@@ -17,6 +17,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
+	"pharmacy-pos/backend/inventory"
 	mw "pharmacy-pos/backend/middleware"
 	"pharmacy-pos/backend/models"
 )
@@ -506,8 +507,21 @@ func (h *DrugHandler) BulkImport(w http.ResponseWriter, r *http.Request) {
 			ReportTypes: inp.ReportTypes,
 			CreatedAt:   time.Now(),
 		}
+		// Stock imported without lot data goes into an OPENING lot, so the
+		// drug's stock and lots agree (ADR-0007).
 		ctx, cancel := context.WithTimeout(bulkCtx, 5*time.Second)
-		_, err := mdb.Drugs().InsertOne(ctx, drug)
+		err := mdb.WithTransaction(ctx, func(txCtx context.Context) error {
+			res, err := mdb.Drugs().InsertOne(txCtx, drug)
+			if err != nil {
+				return err
+			}
+			drug.ID = res.InsertedID.(bson.ObjectID)
+			if drug.Stock <= 0 {
+				return nil
+			}
+			_, err = mdb.DrugLots().InsertOne(txCtx, inventory.OpeningLot(drug))
+			return err
+		})
 		cancel()
 		if err != nil {
 			msg := "บันทึกไม่สำเร็จ"

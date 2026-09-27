@@ -9,6 +9,8 @@ import (
 type StockCountInputItem struct {
 	DrugID  string `json:"drug_id"`
 	Counted int    `json:"counted"`
+	// Lot receives a count above system stock on a lot-tracked drug.
+	Lot *LotTarget `json:"lot,omitempty"`
 }
 
 type StockCountInput struct {
