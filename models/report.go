@@ -48,12 +48,12 @@ type Dashboard struct {
 
 // EodReport — End-of-Day cash reconciliation summary
 type EodReport struct {
-	Date          string  `json:"date"` // YYYY-MM-DD
-	BillCount     int     `json:"bill_count"`
-	TotalSales    float64 `json:"total_sales"`    // sum of sale.total (after discount)
-	TotalDiscount float64 `json:"total_discount"` // sum of sale.discount
-	TotalReceived float64 `json:"total_received"` // sum of sale.received
-	TotalChange   float64 `json:"total_change"`   // sum of sale.change
-	NetCash       float64 `json:"net_cash"`       // = total_received - total_change (should equal total_sales)
-	Bills         []Sale  `json:"bills"`
+	Date          string  `bson:"date"           json:"date"` // YYYY-MM-DD
+	BillCount     int     `bson:"bill_count"     json:"bill_count"`
+	TotalSales    float64 `bson:"total_sales"    json:"total_sales"`    // sum of sale.total (after discount) minus the day's refunds
+	TotalDiscount float64 `bson:"total_discount" json:"total_discount"` // sum of sale.discount
+	TotalReceived float64 `bson:"total_received" json:"total_received"` // sum of sale.received
+	TotalChange   float64 `bson:"total_change"   json:"total_change"`   // sum of sale.change
+	NetCash       float64 `bson:"net_cash"       json:"net_cash"`       // total_received - total_change - the day's refunds
+	Bills         []Sale  `bson:"bills"          json:"bills"`
 }

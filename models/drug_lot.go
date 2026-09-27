@@ -22,6 +22,12 @@ type DrugLot struct {
 	Quantity   int           `bson:"quantity"       json:"quantity"`   // original import qty
 	Remaining  int           `bson:"remaining"      json:"remaining"`  // current qty in this lot
 	CreatedAt  time.Time     `bson:"created_at"     json:"created_at"`
+	// WrittenOffAt marks a lot written off (ADR-0007). Lots are never deleted
+	// once sold from, so voids and returns can give goods back to them; a
+	// written-off lot is never taken from by a sale.
+	WrittenOffAt *time.Time `bson:"written_off_at,omitempty" json:"written_off_at,omitempty"`
+	// NoExpiry marks opening stock imported without lot data (bulk import).
+	NoExpiry bool `bson:"no_expiry,omitempty" json:"no_expiry,omitempty"`
 }
 
 // ExpiringLotItem is returned by GET /api/pharmacy/v1/lots/expiring.
@@ -45,6 +51,10 @@ type LotWriteoff struct {
 	ExpiryDate time.Time     `bson:"expiry_date"   json:"expiry_date"`
 	Qty        int           `bson:"qty"           json:"qty"` // amount written off (positive)
 	CreatedAt  time.Time     `bson:"created_at"    json:"created_at"`
+	LotID      bson.ObjectID `bson:"lot_id,omitempty" json:"lot_id,omitempty"`
+	// Reason is "writeoff" (default) or "deleted" for a lot entered by mistake.
+	Reason string `bson:"reason,omitempty" json:"reason,omitempty"`
+	By     string `bson:"by,omitempty"     json:"by,omitempty"`
 }
 
 // DrugLotInput is the POST body for creating a lot.

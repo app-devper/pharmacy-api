@@ -9,6 +9,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"pharmacy-pos/backend/db"
+	"pharmacy-pos/backend/inventory"
 	"pharmacy-pos/backend/models"
 )
 
@@ -28,6 +29,7 @@ func Void(ctx context.Context, mdb *db.MongoDB, saleID, reason string) error {
 	if sale.Voided {
 		return conflict(errAlreadyVoided.Error())
 	}
+	tz := mdb.Timezone(ctx)
 
 	if err := mdb.WithTransaction(ctx, func(txCtx context.Context) error {
 		now := time.Now()
@@ -83,46 +85,14 @@ func Void(ctx context.Context, mdb *db.MongoDB, saleID, reason string) error {
 				continue
 			}
 
-			if _, err := mdb.Drugs().UpdateOne(txCtx,
-				bson.M{"_id": item.DrugID},
-				bson.M{"$inc": bson.M{"stock": restoreQty}},
-			); err != nil {
+			// Goods come back to the lots they were taken from (inventory).
+			if err := inventory.GiveBack(txCtx, mdb, item, restoreQty, returnedByItem[item.ID]); err != nil {
 				return err
-			}
-
-			// Only restore to real lots the portion of the sale that was
-			// actually deducted from a lot. LotSplits tell the truth:
-			//  • Real splits (non-zero LotID) — from lots at sale or import
-			//    reconcile → reverse back to those lots.
-			//  • Synthetic splits (LotID == zero) — from stock adjustments
-			//    → no lot to give back to; drug.stock was already credited
-			//    above, nothing else to do.
-			//  • Unreconciled OversoldQty — no lot ever assigned; also just
-			//    forgiven via the stock credit.
-			// Prior returns are assumed to have eaten the real-lot portion
-			// first (worst case), so we subtract returned qty from it too.
-			lotCovered := 0
-			for _, sp := range item.LotSplits {
-				if !sp.LotID.IsZero() {
-					lotCovered += sp.Qty
-				}
-			}
-			lotCovered -= returnedByItem[item.ID]
-			if lotCovered > restoreQty {
-				lotCovered = restoreQty
-			}
-			if lotCovered > 0 {
-				if err := restoreSaleItemLots(txCtx, mdb, item, lotCovered, returnedByItem[item.ID]); err != nil {
-					return err
-				}
 			}
 		}
 
-		if sale.CustomerID != nil {
-			remainingSpend := sale.Total - refunded
-			if remainingSpend <= 0 {
-				return nil
-			}
+		// A bill already refunded in full leaves the customer's spend as is.
+		if remainingSpend := sale.Total - refunded; sale.CustomerID != nil && remainingSpend > 0 {
 			updateRes, err := mdb.Customers().UpdateOne(txCtx,
 				bson.M{"_id": sale.CustomerID},
 				bson.M{"$inc": bson.M{"total_spent": -remainingSpend}},
@@ -135,7 +105,10 @@ func Void(ctx context.Context, mdb *db.MongoDB, saleID, reason string) error {
 			}
 		}
 
-		return nil
+		return recordDayEffect(txCtx, mdb, models.EodAdjustment{
+			Date: businessDay(sale.SoldAt, tz), Kind: models.AdjustVoid, RefID: oid, RefNo: sale.BillNo,
+			BillDelta: -1, SalesDelta: -sale.Total, CashDelta: -(sale.Received - sale.Change),
+		})
 	}); err != nil {
 		if errors.Is(err, errAlreadyVoided) {
 			return conflict(err.Error())

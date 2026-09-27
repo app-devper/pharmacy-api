@@ -108,7 +108,7 @@ func (h *SaleHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	out, replayed, err := sales.Sell(ctx, mdb, input)
 	if err != nil {
-		writeSalesError(w, err)
+		writeCommandError(w, err)
 		return
 	}
 	markReplayed(w, replayed)
@@ -168,15 +168,15 @@ func (h *SaleHandler) Void(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	if err := sales.Void(ctx, mdb, chi.URLParam(r, "id"), body.Reason); err != nil {
-		writeSalesError(w, err)
+		writeCommandError(w, err)
 		return
 	}
 	jsonOK(w, map[string]bool{"ok": true})
 }
 
-// writeSalesError renders a sales refusal with its status; anything else is
-// an unexpected 500.
-func writeSalesError(w http.ResponseWriter, err error) {
+// writeCommandError renders a sales or inventory refusal with its status;
+// anything else is an unexpected 500.
+func writeCommandError(w http.ResponseWriter, err error) {
 	var refusal *sales.Error
 	if !errors.As(err, &refusal) {
 		jsonError(w, err.Error(), http.StatusInternalServerError)

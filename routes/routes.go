@@ -155,6 +155,10 @@ func Setup(
 				r.Get("/report/monthly", rh.Monthly)
 				r.Get("/report/top-drugs", rh.TopDrugs)
 				r.Get("/report/eod", rh.Eod)
+				r.Post("/report/eod/close", rh.CloseEod)
+
+				// Stock and lot disagreement report (read-only, ADR-0007)
+				r.Get("/inventory/drift", lh.Drift)
 				r.Get("/report/profit", rh.Profit)
 
 				// KY registers: ky9 purchases, reading every register, export
