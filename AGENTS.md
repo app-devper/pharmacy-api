@@ -30,7 +30,7 @@ Keep this repository layout flat. Do not introduce a nested `app/features/...` a
 - `main.go` loads config, connects MongoDB, bootstraps the default tenant, constructs handlers, and calls `routes.Setup`.
 - `routes/routes.go` builds the Chi router, applies logging/recovery/CORS, then protects `/api/pharmacy/v1` with JWT middleware.
 - `middleware/auth.go` validates HS256 JWTs and stores role, system, tenant, and session identifiers in request context.
-- `middleware/identity.go` checks the token's session still exists in Um-Api's Redis and was issued for the token's system. The role in context stays the token's claim, which is current while its session lives because Um-Api revokes sessions on every role/status/password/account change. Writes and sensitive reads use `live.Require()`; only ordinary catalog reads use `live.RequireOrDegrade()` and may continue under the signed token while Um-Api is unreachable.
+- `middleware/identity.go` checks the token's session still exists in Um-Api's Redis and was issued for the token's system, through Um-Api's `github.com/app-devper/um-api/sessionclient` module (the lookup, 30-second cache, and system binding live there; change them in um-api). This file only applies the per-route outage policy. The role in context stays the token's claim, which is current while its session lives because Um-Api revokes sessions on every role/status/password/account change. Writes and sensitive reads use `live.Require()`; only ordinary catalog reads use `live.RequireOrDegrade()` and may continue under the signed token while Um-Api is unreachable.
 - `middleware/authorize.go` enforces role ordering with `RequireRole`.
 - Handlers resolve the current tenant through middleware helpers and then use the tenant database from `db.MongoManager`.
 
@@ -38,7 +38,7 @@ Keep this repository layout flat. Do not introduce a nested `app/features/...` a
 - Keep the current flat layout; do not introduce an `app/features/...` structure.
 - API base path is `/api/pharmacy/v1`; routes are auth-protected.
 - Roles are ordered `USER < MANAGER < ADMIN < SUPER` (shared role policy, KMP ADR-0004); `RequireRole(min)` allows roles at or above `min`. Every route group names its minimum role, so unknown or empty roles reach nothing.
-- Every route has an entry in `routes/permissions_test.go`; the test fails for an unclassified route. MANAGER+ covers stock counts/adjustments/lots, goods receipt, suppliers, customer edits, labels, and `slow-drugs`; drug identity/price, whole-bill void, reports, KY, and settings writes stay ADMIN+.
+- Every route has an entry in `routes/permissions_test.go`; the test fails for an unclassified route. MANAGER+ covers stock counts/adjustments/lots, goods receipt, suppliers, customer edits, labels, and `slow-drugs`; drug identity/price, whole-bill void, reports, KY registers (ky9, reading, export), and settings writes stay ADMIN+. Recording ky10–12 at the counter is part of selling and is USER+.
 - Handlers should get the tenant from request context via middleware helpers, not from request bodies.
 - Preserve multi-tenant isolation; never hardcode a tenant database except for the existing default tenant behavior.
 - Validate `clientId` consistently with the DB manager rules before constructing database names.

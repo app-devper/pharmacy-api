@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/app-devper/um-api/sessionclient"
+
 	"pharmacy-pos/backend/config"
 	"pharmacy-pos/backend/db"
 	"pharmacy-pos/backend/handlers"
@@ -49,19 +51,11 @@ func main() {
 	seth := handlers.NewSettingsHandler(manager)
 	labh := handlers.NewLabelHandler()
 
-	var verifier mw.IdentityVerifier
-	if cfg.UMRedisHost != "" {
-		rdb, err := mw.NewUMRedisClient(cfg.UMRedisHost)
-		if err != nil {
-			log.Fatalf("UM_REDIS_HOST: %v", err)
-		}
-		defer rdb.Close()
-		// Don't fail startup on a Redis outage: catalog reads can still be served.
-		if err := rdb.Ping(ctx).Err(); err != nil {
-			log.Printf("WARNING: UM Redis is unreachable at startup: %v", err)
-		}
-		verifier = mw.NewRedisVerifier(rdb)
-	} else {
+	checker, err := sessionclient.New(cfg.UMRedisHost)
+	if err != nil {
+		log.Fatalf("UM_REDIS_HOST: %v", err)
+	}
+	if !checker.Enabled() {
 		log.Printf("WARNING: UM_REDIS_HOST is not set; live UM session verification (ADR-0004) is disabled and revoked sessions stay valid until token expiry")
 	}
 
@@ -70,7 +64,7 @@ func main() {
 		cfg.SecretKey, cfg.System,
 		mw.ParseAllowedOrigins(cfg.FrontendOrigin),
 		cfg.GatewayHosts,
-		mw.NewLiveIdentity(verifier),
+		mw.NewLiveIdentity(checker),
 	)
 
 	addr := fmt.Sprintf(":%s", cfg.Port)

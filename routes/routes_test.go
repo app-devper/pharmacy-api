@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/app-devper/um-api/sessionclient"
 	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
 
@@ -26,8 +27,8 @@ var catalogReads = map[string]bool{
 
 type downUM struct{}
 
-func (downUM) Verify(context.Context, string) (mw.Identity, error) {
-	return mw.Identity{}, mw.ErrUMUnavailable
+func (downUM) Session(context.Context, string) (sessionclient.Session, error) {
+	return sessionclient.Session{}, sessionclient.ErrUnavailable
 }
 
 func TestUMOutageRefusesEverythingButCatalogReads(t *testing.T) {
@@ -37,7 +38,7 @@ func TestUMOutageRefusesEverythingButCatalogReads(t *testing.T) {
 		&handlers.ExportHandler{}, &handlers.ImportHandler{}, &handlers.SupplierHandler{},
 		&handlers.StockAdjustmentHandler{}, &handlers.StockCountHandler{}, &handlers.ReturnHandler{},
 		&handlers.MovementsHandler{}, &handlers.SettingsHandler{}, &handlers.LabelHandler{},
-		"test-secret", "PHARMACY", nil, "", mw.NewLiveIdentity(downUM{}),
+		"test-secret", "PHARMACY", nil, "", mw.NewLiveIdentity(sessionclient.NewChecker(downUM{})),
 	)
 	token, _ := jwt.NewWithClaims(jwt.SigningMethodHS256, &mw.AccessClaims{
 		Role: "ADMIN", System: "PHARMACY", ClientId: "123",
