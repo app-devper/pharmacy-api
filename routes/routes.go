@@ -155,6 +155,7 @@ func Setup(
 				r.Get("/report/monthly", rh.Monthly)
 				r.Get("/report/top-drugs", rh.TopDrugs)
 				r.Get("/report/eod", rh.Eod)
+				r.Post("/report/eod/close", rh.CloseEod)
 				r.Get("/report/profit", rh.Profit)
 
 				// KY registers: ky9 purchases, reading every register, export

@@ -204,6 +204,13 @@ func (m *MongoDB) StockCounts() *mongo.Collection      { return m.db.Collection(
 func (m *MongoDB) DrugReturns() *mongo.Collection      { return m.db.Collection("drug_returns") }
 func (m *MongoDB) LotWriteoffs() *mongo.Collection     { return m.db.Collection("lot_writeoffs") }
 func (m *MongoDB) Settings() *mongo.Collection         { return m.db.Collection("settings") }
+func (m *MongoDB) EodCloses() *mongo.Collection        { return m.db.Collection("eod_closes") }
+func (m *MongoDB) EodAdjustments() *mongo.Collection   { return m.db.Collection("eod_adjustments") }
+
+// EodDays holds one guard document per business day. Every command that
+// affects a day writes it, so a close and a sale of the same day cannot
+// commit without one seeing the other (ADR-0006).
+func (m *MongoDB) EodDays() *mongo.Collection { return m.db.Collection("eod_days") }
 
 // ensureInitialized runs index creation for a tenant exactly once, best-effort.
 // Errors are logged but never propagated, so a single bad index (e.g. a unique
@@ -243,6 +250,18 @@ func (m *MongoDB) CreateIndexes(ctx context.Context) error {
 		Options: options.Index().SetUnique(true).SetPartialFilterExpression(
 			bson.M{"client_request_id": bson.M{"$type": "string", "$gt": ""}},
 		),
+	}); err != nil {
+		return err
+	}
+	// One End-of-day close per business day (ADR-0006).
+	if _, err := m.EodCloses().Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "date", Value: 1}},
+		Options: options.Index().SetUnique(true),
+	}); err != nil {
+		return err
+	}
+	if _, err := m.EodAdjustments().Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "date", Value: 1}, {Key: "at", Value: 1}},
 	}); err != nil {
 		return err
 	}
