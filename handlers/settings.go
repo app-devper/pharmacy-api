@@ -21,7 +21,7 @@ type SettingsHandler struct{ dbm *db.Manager }
 
 func NewSettingsHandler(d *db.Manager) *SettingsHandler { return &SettingsHandler{dbm: d} }
 
-const settingsKey = "singleton"
+const settingsKey = db.SettingsKey
 
 // loadStockSettings fetches the tenant's stock config. On any error (missing
 // document, DB down, decode failure) it silently falls back to built-in

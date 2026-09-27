@@ -106,7 +106,7 @@ func (h *DrugLotHandler) AddLot(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	tz := loadTimezone(ctx, mdb)
+	tz := mdb.Timezone(ctx)
 	expiry, _ := time.ParseInLocation("2006-01-02", input.ExpiryDate, tz)
 
 	importDate := time.Now()

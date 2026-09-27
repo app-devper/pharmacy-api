@@ -14,26 +14,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"go.mongodb.org/mongo-driver/v2/bson"
-	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
 	mw "pharmacy-pos/backend/middleware"
 	"pharmacy-pos/backend/models"
 )
-
-// isMongoDuplicate returns true when err is a MongoDB duplicate-key (code 11000) error.
-func isMongoDuplicate(err error) bool {
-	var we mongo.WriteException
-	if errors.As(err, &we) {
-		for _, e := range we.WriteErrors {
-			if e.Code == 11000 {
-				return true
-			}
-		}
-	}
-	return false
-}
 
 type DrugHandler struct{ dbm *db.Manager }
 
@@ -106,40 +92,6 @@ func validatePriceTiers(p models.PriceTiers, retailFallback float64) (models.Pri
 		out[models.TierRetail] = retailFallback
 	}
 	return out, nil
-}
-
-// resolveTierPrice picks the effective per-unit price given the customer's tier.
-// A missing tier falls back to retail, which itself falls back to `base`
-// (typically the drug's legacy SellPrice).
-func resolveTierPrice(base float64, p models.PriceTiers, tier string) float64 {
-	if tier != "" && tier != models.TierRetail {
-		if v, ok := p[tier]; ok && v > 0 {
-			return v
-		}
-	}
-	if v, ok := p[models.TierRetail]; ok && v > 0 {
-		return v
-	}
-	return base
-}
-
-// isValidPriceTier accepts any string (dynamic tiers), rejecting only control
-// characters. "" is allowed and means "retail" implicitly.
-func isValidPriceTier(t string) bool {
-	t = strings.TrimSpace(t)
-	if t == "" {
-		return true
-	}
-	// Guard against accidental control chars / overly long names.
-	if len(t) > 32 {
-		return false
-	}
-	for _, r := range t {
-		if r < 32 {
-			return false
-		}
-	}
-	return true
 }
 
 func buildDrugCreatePayload(input models.DrugInput, now time.Time, loc *time.Location) (models.Drug, *models.DrugLot, error) {
@@ -350,7 +302,7 @@ func (h *DrugHandler) Add(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	tz := loadTimezone(ctx, mdb)
+	tz := mdb.Timezone(ctx)
 	drug, createLot, err := buildDrugCreatePayload(input, time.Now().In(tz), tz)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusBadRequest)
@@ -383,7 +335,7 @@ func (h *DrugHandler) Add(w http.ResponseWriter, r *http.Request) {
 		}
 		return nil
 	}); err != nil {
-		if isMongoDuplicate(err) {
+		if db.IsDuplicateKey(err) {
 			jsonError(w, "บาร์โค้ดนี้มีอยู่ในระบบแล้ว", http.StatusConflict)
 			return
 		}
@@ -454,7 +406,7 @@ func (h *DrugHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}},
 	)
 	if err != nil {
-		if isMongoDuplicate(err) {
+		if db.IsDuplicateKey(err) {
 			jsonError(w, "บาร์โค้ดนี้มีอยู่ในระบบแล้ว", http.StatusConflict)
 			return
 		}
@@ -559,7 +511,7 @@ func (h *DrugHandler) BulkImport(w http.ResponseWriter, r *http.Request) {
 		cancel()
 		if err != nil {
 			msg := "บันทึกไม่สำเร็จ"
-			if isMongoDuplicate(err) {
+			if db.IsDuplicateKey(err) {
 				msg = "บาร์โค้ดนี้มีอยู่ในระบบแล้ว"
 			}
 			result.Errors = append(result.Errors, BulkImportRowError{Row: row, Name: inp.Name, Message: msg})
