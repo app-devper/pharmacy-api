@@ -88,7 +88,7 @@ func (h *SupplierHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := mdb.Suppliers().InsertOne(ctx, supplier)
 	if err != nil {
-		if isMongoDuplicate(err) {
+		if db.IsDuplicateKey(err) {
 			jsonError(w, "ชื่อนี้มีอยู่ในระบบแล้ว", http.StatusConflict)
 			return
 		}
@@ -140,7 +140,7 @@ func (h *SupplierHandler) Update(w http.ResponseWriter, r *http.Request) {
 		options.FindOneAndUpdate().SetReturnDocument(options.After),
 	).Decode(&updated)
 	if err != nil {
-		if isMongoDuplicate(err) {
+		if db.IsDuplicateKey(err) {
 			jsonError(w, "ชื่อนี้มีอยู่ในระบบแล้ว", http.StatusConflict)
 			return
 		}

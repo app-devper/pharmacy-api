@@ -62,7 +62,7 @@ func (h *CustomerHandler) Add(w http.ResponseWriter, r *http.Request) {
 	if input.Disease == "" {
 		input.Disease = "-"
 	}
-	if !isValidPriceTier(input.PriceTier) {
+	if !models.IsValidPriceTier(input.PriceTier) {
 		jsonError(w, "price_tier ต้องเป็น retail|regular|wholesale หรือว่าง", http.StatusBadRequest)
 		return
 	}
@@ -84,7 +84,7 @@ func (h *CustomerHandler) Add(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := mdb.Customers().InsertOne(ctx, cust)
 	if err != nil {
-		if isMongoDuplicate(err) {
+		if db.IsDuplicateKey(err) {
 			jsonError(w, "เบอร์โทรนี้มีลูกค้าอยู่ในระบบแล้ว", http.StatusConflict)
 			return
 		}
@@ -116,7 +116,7 @@ func (h *CustomerHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if input.Disease == "" {
 		input.Disease = "-"
 	}
-	if !isValidPriceTier(input.PriceTier) {
+	if !models.IsValidPriceTier(input.PriceTier) {
 		jsonError(w, "price_tier ต้องเป็น retail|regular|wholesale หรือว่าง", http.StatusBadRequest)
 		return
 	}
@@ -145,7 +145,7 @@ func (h *CustomerHandler) Update(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, "customer not found", http.StatusNotFound)
 			return
 		}
-		if isMongoDuplicate(err) {
+		if db.IsDuplicateKey(err) {
 			jsonError(w, "เบอร์โทรนี้มีลูกค้าอยู่ในระบบแล้ว", http.StatusConflict)
 			return
 		}

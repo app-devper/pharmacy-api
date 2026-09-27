@@ -110,7 +110,7 @@ func (h *ImportHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	tz := loadTimezone(ctx, mdb)
+	tz := mdb.Timezone(ctx)
 
 	// Generate atomic doc_no: IMP-YYMMDD-NNN (keyed by local calendar day).
 	now := time.Now()
@@ -202,7 +202,7 @@ func (h *ImportHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tz := loadTimezone(ctx, mdb)
+	tz := mdb.Timezone(ctx)
 	receiveDate := existing.ReceiveDate
 	if input.ReceiveDate != "" {
 		parsed, err := time.ParseInLocation("2006-01-02", input.ReceiveDate, tz)
@@ -265,7 +265,7 @@ func (h *ImportHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	tz := loadTimezone(ctx, mdb)
+	tz := mdb.Timezone(ctx)
 
 	var po models.PurchaseOrder
 	if err := mdb.PurchaseOrders().FindOne(ctx, bson.M{"_id": oid}).Decode(&po); err != nil {

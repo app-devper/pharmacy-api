@@ -236,6 +236,16 @@ func (m *MongoDB) CreateIndexes(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
+	// Partial unique index on drug_returns.client_request_id: a return is
+	// recorded at most once per client request (ADR-0002).
+	if _, err := m.DrugReturns().Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "client_request_id", Value: 1}},
+		Options: options.Index().SetUnique(true).SetPartialFilterExpression(
+			bson.M{"client_request_id": bson.M{"$type": "string", "$gt": ""}},
+		),
+	}); err != nil {
+		return err
+	}
 	// Index on sale_items.sale_id
 	if _, err := m.SaleItems().Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "sale_id", Value: 1}},

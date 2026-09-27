@@ -107,7 +107,7 @@ func (h *StockCountHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	tz := loadTimezone(ctx, mdb)
+	tz := mdb.Timezone(ctx)
 
 	var count models.StockCount
 	if err := mdb.WithTransaction(ctx, func(txCtx context.Context) error {
