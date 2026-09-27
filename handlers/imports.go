@@ -300,7 +300,7 @@ func (h *ImportHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 	var logEntries []importLogEntry
 	if err := mdb.WithTransaction(ctx, func(txCtx context.Context) error {
 		now := time.Now()
-		receiveDate := po.ReceiveDate.Format("2006-01-02")
+		receiveDate := localDate(po.ReceiveDate, tz)
 		attemptLogs := make([]importLogEntry, 0, len(po.Items))
 
 		for _, item := range po.Items {
