@@ -2,29 +2,13 @@ package middleware
 
 import (
 	"net/http"
+
+	"github.com/app-devper/um-api/sessionclient"
 )
 
-// roleLevel maps role name to numeric level. Higher = more privilege.
-var roleLevel = map[string]int{
-	"USER":    1,
-	"MANAGER": 2,
-	"ADMIN":   3,
-	"SUPER":   4,
-}
-
-// RequireRole returns middleware that allows requests where the caller's role
-// is >= minRole in the hierarchy (USER < MANAGER < ADMIN < SUPER).
+// RequireRole allows requests whose verified Principal is minRole or above in
+// UM's ordering (USER < MANAGER < ADMIN < SUPER); an unknown role reaches
+// nothing. It runs after a Verifier middleware.
 func RequireRole(minRole string) func(http.Handler) http.Handler {
-	min := roleLevel[minRole]
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			role := GetRole(r.Context())
-			level, ok := roleLevel[role]
-			if !ok || level < min {
-				http.Error(w, `{"error":"insufficient permissions"}`, http.StatusForbidden)
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
+	return sessionclient.RequireRole(sessionclient.Role(minRole), RenderRefusal)
 }

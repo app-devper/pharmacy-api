@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"github.com/app-devper/um-api/sessionclient"
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 
@@ -8,11 +9,12 @@ import (
 	mw "pharmacy-pos/backend/middleware"
 )
 
+// Role names in UM's ordering (sessionclient owns it).
 const (
-	RoleSUPER   = "SUPER"
-	RoleADMIN   = "ADMIN"
-	RoleMANAGER = "MANAGER"
-	RoleUSER    = "USER"
+	RoleSUPER   = string(sessionclient.RoleSuper)
+	RoleADMIN   = string(sessionclient.RoleAdmin)
+	RoleMANAGER = string(sessionclient.RoleManager)
+	RoleUSER    = string(sessionclient.RoleUser)
 )
 
 func Setup(
@@ -31,11 +33,9 @@ func Setup(
 	mvh *handlers.MovementsHandler,
 	seth *handlers.SettingsHandler,
 	labh *handlers.LabelHandler,
-	secretKey string,
-	authSystem string,
 	allowedOrigins []string,
 	gatewayHosts string,
-	live *mw.LiveIdentity,
+	identity *sessionclient.Verifier,
 ) *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(chimiddleware.Logger)
@@ -45,7 +45,6 @@ func Setup(
 	r.Use(mw.CORS(allowedOrigins))
 
 	r.Route("/api/pharmacy/v1", func(r chi.Router) {
-		r.Use(mw.RequireAuth(secretKey, authSystem))
 
 		// Route permissions follow the shared role policy (KMP ADR-0004):
 		// USER < MANAGER < ADMIN < SUPER. Every group names its minimum role,
@@ -54,7 +53,7 @@ func Setup(
 		// ── Catalog reads (USER+) ─────────────────────────────────
 		// ADR-0001: may continue under the signed token while UM is unreachable.
 		r.Group(func(r chi.Router) {
-			r.Use(live.RequireOrDegrade())
+			r.Use(identity.Middleware(sessionclient.DegradeReads, mw.RenderRefusal))
 			r.Use(mw.RequireRole(RoleUSER))
 
 			r.Get("/drugs", dh.List)
@@ -66,7 +65,7 @@ func Setup(
 		// Everything below is a write or sensitive read and needs a current
 		// UM session (ADR-0001).
 		r.Group(func(r chi.Router) {
-			r.Use(live.Require())
+			r.Use(identity.Middleware(sessionclient.Strict, mw.RenderRefusal))
 
 			// ── USER+: selling ────────────────────────────────────
 			r.Group(func(r chi.Router) {

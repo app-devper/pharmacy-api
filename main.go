@@ -51,20 +51,26 @@ func main() {
 	seth := handlers.NewSettingsHandler(manager)
 	labh := handlers.NewLabelHandler()
 
-	checker, err := sessionclient.New(cfg.UMRedisHost)
+	// Every request is verified against UM's live session (um-api ADR-0005);
+	// without UM_REDIS_HOST the API refuses to start.
+	umSessions, err := sessionclient.RedisStoreFor(cfg.UMRedisHost)
 	if err != nil {
 		log.Fatalf("UM_REDIS_HOST: %v", err)
 	}
-	if !checker.Enabled() {
-		log.Printf("WARNING: UM_REDIS_HOST is not set; live UM session verification (ADR-0004) is disabled and revoked sessions stay valid until token expiry")
+	identity, err := sessionclient.NewVerifier(sessionclient.Config{
+		SecretKey: cfg.SecretKey,
+		System:    cfg.System,
+		Store:     umSessions,
+	})
+	if err != nil {
+		log.Fatalf("UM token verification: %v", err)
 	}
 
 	r := routes.Setup(
 		dh, lh, ch, sh, rh, kh, eh, ih, suph, ah, sch, reth, mvh, seth, labh,
-		cfg.SecretKey, cfg.System,
 		mw.ParseAllowedOrigins(cfg.FrontendOrigin),
 		cfg.GatewayHosts,
-		mw.NewLiveIdentity(checker),
+		identity,
 	)
 
 	addr := fmt.Sprintf(":%s", cfg.Port)
