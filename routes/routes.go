@@ -81,6 +81,13 @@ func Setup(
 				r.Post("/sales", sh.Create)
 				r.Get("/sales/{id}/items", sh.Items)
 				r.Get("/sales/{id}/ky", kh.BySale)
+
+				// KY records made at the counter when selling a controlled,
+				// dangerous, or prescription drug. Reading and exporting the
+				// registers stays ADMIN+.
+				r.Post("/ky10", kh.AddKy10)
+				r.Post("/ky11", kh.AddKy11)
+				r.Post("/ky12", kh.AddKy12)
 				r.Post("/sales/{id}/return", reth.Create)
 				r.Get("/sales/{id}/returns", reth.List)
 
@@ -130,7 +137,7 @@ func Setup(
 				r.Get("/report/slow-drugs", rh.SlowDrugs)
 			})
 
-			// ── ADMIN+: drug identity and price, void, KY, settings, reports ──
+			// ── ADMIN+: drug identity and price, void, KY registers, settings, reports ──
 			r.Group(func(r chi.Router) {
 				r.Use(mw.RequireRole(RoleADMIN))
 
@@ -151,15 +158,12 @@ func Setup(
 				r.Get("/report/eod", rh.Eod)
 				r.Get("/report/profit", rh.Profit)
 
-				// KY administration and export
+				// KY registers: ky9 purchases, reading every register, export
 				r.Get("/ky9", kh.ListKy9)
 				r.Post("/ky9", kh.AddKy9)
 				r.Get("/ky10", kh.ListKy10)
-				r.Post("/ky10", kh.AddKy10)
 				r.Get("/ky11", kh.ListKy11)
-				r.Post("/ky11", kh.AddKy11)
 				r.Get("/ky12", kh.ListKy12)
-				r.Post("/ky12", kh.AddKy12)
 				r.Get("/export/{form}", eh.Export)
 
 				// Settings (write)
