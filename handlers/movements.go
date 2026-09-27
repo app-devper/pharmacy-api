@@ -46,7 +46,7 @@ func (h *MovementsHandler) List(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	q := r.URL.Query()
-	tz := loadTimezone(ctx, d)
+	tz := d.Timezone(ctx)
 
 	now := time.Now().In(tz)
 	from := now.AddDate(0, 0, -30)

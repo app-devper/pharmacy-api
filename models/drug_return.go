@@ -17,6 +17,10 @@ type DrugReturn struct {
 	Refund       float64        `bson:"refund"                json:"refund"`
 	Reason       string         `bson:"reason"                json:"reason"`
 	ReturnedAt   time.Time      `bson:"returned_at"           json:"returned_at"`
+	// ClientRequestID makes the return a Commercial command: repeating it
+	// returns this record instead of returning goods again (ADR-0002, ADR-0005).
+	ClientRequestID    string `bson:"client_request_id,omitempty" json:"client_request_id,omitempty"`
+	RequestFingerprint string `bson:"request_fingerprint,omitempty" json:"-"`
 }
 
 type ReturnItem struct {
@@ -30,8 +34,10 @@ type ReturnItem struct {
 }
 
 type DrugReturnInput struct {
-	Items  []ReturnItemInput `json:"items"`
-	Reason string            `json:"reason"`
+	// ClientRequestID is optional until every client sends one.
+	ClientRequestID string            `json:"client_request_id,omitempty"`
+	Items           []ReturnItemInput `json:"items"`
+	Reason          string            `json:"reason"`
 }
 
 type ReturnItemInput struct {

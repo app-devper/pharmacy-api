@@ -54,7 +54,7 @@ func (h *ReportHandler) Summary(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	tz := loadTimezone(ctx, mdb)
+	tz := mdb.Timezone(ctx)
 	now := time.Now().In(tz)
 	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, tz)
 	endOfDay := startOfDay.Add(24 * time.Hour)
@@ -165,7 +165,7 @@ func (h *ReportHandler) Eod(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	tz := loadTimezone(ctx, mdb)
+	tz := mdb.Timezone(ctx)
 
 	dateStr := r.URL.Query().Get("date")
 	var startOfDay time.Time
@@ -234,7 +234,7 @@ func (h *ReportHandler) Profit(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	from, to := resolveReportRange(r, loadTimezone(ctx, mdb))
+	from, to := resolveReportRange(r, mdb.Timezone(ctx))
 
 	totals, err := netTotalsByDrug(ctx, mdb, from, to)
 	if err != nil {
@@ -458,7 +458,7 @@ func (h *ReportHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 
-	tz := loadTimezone(ctx, mdb)
+	tz := mdb.Timezone(ctx)
 	now := time.Now().In(tz)
 	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, tz)
 	endOfDay := startOfDay.Add(24 * time.Hour)

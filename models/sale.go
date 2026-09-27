@@ -7,9 +7,12 @@ import (
 )
 
 type Sale struct {
-	ID                 bson.ObjectID  `bson:"_id,omitempty"  json:"id"`
-	BillNo             string         `bson:"bill_no"        json:"bill_no"`
-	ClientRequestID    string         `bson:"client_request_id,omitempty" json:"client_request_id,omitempty"`
+	ID              bson.ObjectID `bson:"_id,omitempty"  json:"id"`
+	BillNo          string        `bson:"bill_no"        json:"bill_no"`
+	ClientRequestID string        `bson:"client_request_id,omitempty" json:"client_request_id,omitempty"`
+	// RequestFingerprint digests the request that created this sale, so a
+	// reused ClientRequestID with different content is refused (ADR-0005).
+	RequestFingerprint string         `bson:"request_fingerprint,omitempty" json:"-"`
 	CustomerID         *bson.ObjectID `bson:"customer_id"    json:"customer_id"`
 	CustomerName       string         `bson:"customer_name"  json:"customer_name"`
 	Discount           float64        `bson:"discount"       json:"discount"`
