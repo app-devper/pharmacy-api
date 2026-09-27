@@ -2,9 +2,14 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
+	"pharmacy-pos/backend/sales"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -157,6 +162,8 @@ func (h *ReportHandler) Daily(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, result)
 }
 
+// Eod is the End-of-day view of ?date= (default today): live for an open
+// day, the close snapshot plus Late sale adjustments for a closed one.
 func (h *ReportHandler) Eod(w http.ResponseWriter, r *http.Request) {
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
@@ -165,65 +172,40 @@ func (h *ReportHandler) Eod(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	tz := mdb.Timezone(ctx)
 
-	dateStr := r.URL.Query().Get("date")
-	var startOfDay time.Time
-	if dateStr != "" {
-		t, err := time.ParseInLocation("2006-01-02", dateStr, tz)
-		if err != nil {
-			jsonError(w, "date must be YYYY-MM-DD", http.StatusBadRequest)
-			return
-		}
-		startOfDay = t
-	} else {
-		now := time.Now().In(tz)
-		startOfDay = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, tz)
-		dateStr = startOfDay.Format("2006-01-02")
-	}
-	endOfDay := startOfDay.Add(24 * time.Hour)
-
-	filter := notVoided(bson.M{"sold_at": bson.M{"$gte": startOfDay, "$lt": endOfDay}})
-	cur, err := mdb.Sales().Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "sold_at", Value: 1}}))
+	day, err := sales.Day(ctx, mdb, r.URL.Query().Get("date"))
 	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
+		writeSalesError(w, err)
 		return
 	}
-	defer cur.Close(ctx)
+	jsonOK(w, day)
+}
 
-	var bills []models.Sale
-	if err := cur.All(ctx, &bills); err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
+// CloseEod records the End-of-day close of a business day (ADR-0006).
+func (h *ReportHandler) CloseEod(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Date         string `json:"date"`
+		ClosedByName string `json:"closed_by_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		jsonError(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	if bills == nil {
-		bills = []models.Sale{}
-	}
-
-	refunds, err := sumReturnRefunds(ctx, mdb, startOfDay, endOfDay)
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, "unauthorized client", http.StatusForbidden)
 		return
 	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
 
-	var totalSales, totalDisc, totalRec, totalChange float64
-	for _, b := range bills {
-		totalSales += b.Total
-		totalDisc += b.Discount
-		totalRec += b.Received
-		totalChange += b.Change
+	closed, replayed, err := sales.Close(ctx, mdb, strings.TrimSpace(body.Date), strings.TrimSpace(body.ClosedByName))
+	if err != nil {
+		writeSalesError(w, err)
+		return
 	}
-
-	jsonOK(w, models.EodReport{
-		Date:          dateStr,
-		BillCount:     len(bills),
-		TotalSales:    totalSales - refunds,
-		TotalDiscount: totalDisc,
-		TotalReceived: totalRec,
-		TotalChange:   totalChange,
-		NetCash:       totalRec - totalChange - refunds,
-		Bills:         bills,
-	})
+	markReplayed(w, replayed)
+	jsonOK(w, closed)
 }
 
 func (h *ReportHandler) Profit(w http.ResponseWriter, r *http.Request) {

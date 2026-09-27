@@ -28,6 +28,7 @@ func Void(ctx context.Context, mdb *db.MongoDB, saleID, reason string) error {
 	if sale.Voided {
 		return conflict(errAlreadyVoided.Error())
 	}
+	tz := mdb.Timezone(ctx)
 
 	if err := mdb.WithTransaction(ctx, func(txCtx context.Context) error {
 		now := time.Now()
@@ -118,11 +119,8 @@ func Void(ctx context.Context, mdb *db.MongoDB, saleID, reason string) error {
 			}
 		}
 
-		if sale.CustomerID != nil {
-			remainingSpend := sale.Total - refunded
-			if remainingSpend <= 0 {
-				return nil
-			}
+		// A bill already refunded in full leaves the customer's spend as is.
+		if remainingSpend := sale.Total - refunded; sale.CustomerID != nil && remainingSpend > 0 {
 			updateRes, err := mdb.Customers().UpdateOne(txCtx,
 				bson.M{"_id": sale.CustomerID},
 				bson.M{"$inc": bson.M{"total_spent": -remainingSpend}},
@@ -135,7 +133,10 @@ func Void(ctx context.Context, mdb *db.MongoDB, saleID, reason string) error {
 			}
 		}
 
-		return nil
+		return recordDayEffect(txCtx, mdb, models.EodAdjustment{
+			Date: businessDay(sale.SoldAt, tz), Kind: models.AdjustVoid, RefID: oid, RefNo: sale.BillNo,
+			BillDelta: -1, SalesDelta: -sale.Total, CashDelta: -(sale.Received - sale.Change),
+		})
 	}); err != nil {
 		if errors.Is(err, errAlreadyVoided) {
 			return conflict(err.Error())

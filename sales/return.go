@@ -241,7 +241,10 @@ func recordReturn(ctx context.Context, mdb *db.MongoDB, oid bson.ObjectID, input
 			}
 		}
 
-		return nil
+		return recordDayEffect(txCtx, mdb, models.EodAdjustment{
+			Date: businessDay(now, tz), Kind: models.AdjustReturn, RefID: ret.ID, RefNo: returnNo,
+			SalesDelta: -refund, CashDelta: -refund,
+		})
 	}); err != nil {
 		if db.IsDuplicateKey(err) {
 			return models.DrugReturn{}, err // runOnce replays the committed attempt

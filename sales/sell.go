@@ -137,7 +137,10 @@ func sell(ctx context.Context, mdb *db.MongoDB, input models.SaleInput, fp strin
 		}
 
 		billNo = generatedBillNo
-		return nil
+		return recordDayEffect(txCtx, mdb, models.EodAdjustment{
+			Date: now.Format(dayLayout), Kind: models.AdjustLateSale, RefID: saleOID, RefNo: generatedBillNo,
+			BillDelta: 1, SalesDelta: total, CashDelta: received - change,
+		})
 	}); err != nil {
 		if db.IsDuplicateKey(err) {
 			return models.SaleResponse{}, err // runOnce replays the committed attempt
