@@ -197,3 +197,58 @@ func markReplayed(w http.ResponseWriter, replayed bool) {
 		w.Header().Set("Idempotent-Replayed", "true")
 	}
 }
+
+// Abandon closes a queued sale, or a recorded sale's refused KY forms, that
+// will not be recorded (ADR-0009). A queued sale that was recorded meanwhile
+// is a 409 carrying the sale, so the client marks its entry synced.
+func (h *SaleHandler) Abandon(w http.ResponseWriter, r *http.Request) {
+	var input models.AbandonInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		jsonError(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	out, replayed, err := sales.Abandon(ctx, mdb, input)
+	var sold *sales.AlreadySold
+	if errors.As(err, &sold) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": sold.Error(), "sale": sold.Sale})
+		return
+	}
+	if err != nil {
+		writeCommandError(w, err)
+		return
+	}
+	markReplayed(w, replayed)
+	jsonOK(w, out)
+}
+
+// Abandoned lists abandonments, newest first (limit, default 200).
+func (h *SaleHandler) Abandoned(w http.ResponseWriter, r *http.Request) {
+	limit := int64(200)
+	if l, err := strconv.ParseInt(r.URL.Query().Get("limit"), 10, 64); err == nil && l > 0 {
+		limit = l
+	}
+	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
+	if err != nil {
+		jsonError(w, "unauthorized client", http.StatusForbidden)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	out, err := sales.Abandoned(ctx, mdb, limit)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, out)
+}

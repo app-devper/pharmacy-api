@@ -70,7 +70,20 @@ func OpeningLot(drug models.Drug) models.DrugLot {
 	return models.DrugLot{
 		DrugID: drug.ID, DrugName: drug.Name, LotNumber: "OPENING", NoExpiry: true,
 		ImportDate: now, CostPrice: &drug.CostPrice, Quantity: drug.Stock, Remaining: drug.Stock, CreatedAt: now,
+		Origin: models.LotOpening,
 	}
+}
+
+// OpenStock records the lot a new drug's stock is in. The drug was inserted
+// with that stock already, so only the lot is written. Call inside the
+// transaction that inserts the drug.
+func OpenStock(txCtx context.Context, mdb *db.MongoDB, lot models.DrugLot) error {
+	lot.Origin = models.LotOpening
+	if lot.CreatedAt.IsZero() {
+		lot.CreatedAt = time.Now()
+	}
+	_, err := mdb.DrugLots().InsertOne(txCtx, lot)
+	return err
 }
 
 // Adjust changes a drug's stock by in.Delta and records why.
@@ -193,7 +206,7 @@ func addToLot(txCtx context.Context, mdb *db.MongoDB, tz *time.Location, drug mo
 		}
 		cost := drug.CostPrice
 		lot = models.DrugLot{DrugID: drug.ID, DrugName: drug.Name, LotNumber: target.LotNumber, ExpiryDate: expiry,
-			ImportDate: time.Now(), CostPrice: &cost, CreatedAt: time.Now()}
+			ImportDate: time.Now(), CostPrice: &cost, CreatedAt: time.Now(), Origin: models.LotAdjustment}
 		res, err := mdb.DrugLots().InsertOne(txCtx, lot)
 		if err != nil {
 			return nil, false, err
@@ -420,7 +433,8 @@ func DeleteLot(ctx context.Context, mdb *db.MongoDB, drugID, lotID string) error
 		}
 		_, err = mdb.LotWriteoffs().InsertOne(txCtx, models.LotWriteoff{
 			DrugID: lot.DrugID, DrugName: lot.DrugName, LotNumber: lot.LotNumber, ExpiryDate: lot.ExpiryDate,
-			Qty: lot.Remaining, CreatedAt: time.Now(), LotID: lot.ID, Reason: "deleted", By: actor(txCtx),
+			Qty: lot.Remaining, CreatedAt: time.Now(), LotID: lot.ID, Reason: deletedLot, By: actor(txCtx),
+			Received: receivedBy(lot),
 		})
 		return err
 	})
@@ -491,4 +505,16 @@ func Drift(ctx context.Context, mdb *db.MongoDB) ([]DriftRow, error) {
 	}
 	slices.SortFunc(rows, func(a, b DriftRow) int { return strings.Compare(a.DrugName, b.DrugName) })
 	return rows, nil
+}
+
+const deletedLot = "deleted"
+
+// receivedBy is what the lot's own receipt put into stock: nothing for a lot
+// a stock increase created, whose adjustment is its movement.
+func receivedBy(lot models.DrugLot) *int {
+	received := lot.Quantity
+	if lot.Origin == models.LotAdjustment {
+		received = 0
+	}
+	return &received
 }
