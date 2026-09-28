@@ -1,29 +1,18 @@
 package middleware
 
 import (
+	"encoding/json"
 	"net/http"
-	"strings"
+
+	"github.com/app-devper/um-api/servicekit/gateway"
 )
 
+// RequireGatewayHost refuses requests that did not come through the gateway
+// (um-api servicekit, its ADR-0007), as {"error": ...} like every handler.
 func RequireGatewayHost(allowedHosts string) func(http.Handler) http.Handler {
-	allowed := map[string]bool{}
-	for _, host := range strings.Split(allowedHosts, ",") {
-		host = strings.ToLower(strings.TrimSpace(host))
-		if host != "" {
-			allowed[host] = true
-		}
-	}
-	return func(next http.Handler) http.Handler {
-		if len(allowed) == 0 {
-			return next
-		}
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			forwarded := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Host"), ",")[0])
-			if !allowed[strings.ToLower(forwarded)] {
-				http.Error(w, `{"error":"direct access is not allowed"}`, http.StatusForbidden)
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
+	return gateway.Middleware(gateway.ParseHosts(allowedHosts), func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": gateway.Message})
+	})
 }

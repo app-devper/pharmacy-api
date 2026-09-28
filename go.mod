@@ -13,6 +13,7 @@ require (
 )
 
 require (
+	github.com/app-devper/um-api/servicekit v0.1.0
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/klauspost/compress v1.17.6 // indirect
 	github.com/redis/go-redis/v9 v9.22.0 // indirect
