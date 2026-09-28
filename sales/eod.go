@@ -12,6 +12,7 @@ import (
 
 	"pharmacy-pos/backend/db"
 	"pharmacy-pos/backend/models"
+	"pharmacy-pos/backend/reporting"
 )
 
 // End-of-day close (ADR-0003, ADR-0006). A business day is a calendar date in
@@ -140,57 +141,9 @@ func Day(ctx context.Context, mdb *db.MongoDB, date string) (models.EodDay, erro
 	}, nil
 }
 
-// liveReport computes a day's report from its confirmed, unvoided sales and
-// the refunds of returns made that day.
+// liveReport is the day's report by the reporting rules (ADR-0008).
 func liveReport(ctx context.Context, mdb *db.MongoDB, day time.Time, tz *time.Location) (models.EodReport, error) {
-	start := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, tz)
-	end := start.AddDate(0, 0, 1)
-
-	cur, err := mdb.Sales().Find(ctx,
-		bson.M{"sold_at": bson.M{"$gte": start, "$lt": end}, "voided": bson.M{"$ne": true}},
-		options.Find().SetSort(bson.D{{Key: "sold_at", Value: 1}}),
-	)
-	if err != nil {
-		return models.EodReport{}, err
-	}
-	bills := []models.Sale{}
-	if err := cur.All(ctx, &bills); err != nil {
-		return models.EodReport{}, err
-	}
-
-	refunds := 0.0
-	retCur, err := mdb.DrugReturns().Find(ctx, bson.M{"returned_at": bson.M{"$gte": start, "$lt": end}},
-		options.Find().SetProjection(bson.M{"refund": 1}))
-	if err != nil {
-		return models.EodReport{}, err
-	}
-	var returns []struct {
-		Refund float64 `bson:"refund"`
-	}
-	if err := retCur.All(ctx, &returns); err != nil {
-		return models.EodReport{}, err
-	}
-	for _, r := range returns {
-		refunds += r.Refund
-	}
-
-	var sales, discount, received, change float64
-	for _, b := range bills {
-		sales += b.Total
-		discount += b.Discount
-		received += b.Received
-		change += b.Change
-	}
-	return models.EodReport{
-		Date:          start.Format(dayLayout),
-		BillCount:     len(bills),
-		TotalSales:    sales - refunds,
-		TotalDiscount: discount,
-		TotalReceived: received,
-		TotalChange:   change,
-		NetCash:       received - change - refunds,
-		Bills:         bills,
-	}, nil
+	return reporting.Day(ctx, mdb, day, tz)
 }
 
 // touchDay writes the day's guard document, so this transaction conflicts
