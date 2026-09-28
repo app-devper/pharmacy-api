@@ -70,6 +70,14 @@ func sell(ctx context.Context, mdb *db.MongoDB, input models.SaleInput, fp strin
 		return models.SaleResponse{}, invalid("received must be >= total")
 	}
 	change := math.Max(0, received-total)
+	share := 1.0 // the part of each line's subtotal the customer paid
+	if subtotal > 0 {
+		share = total / subtotal
+	}
+	ky, err := planKy(ctx, mdb, input, preparedItems)
+	if err != nil {
+		return models.SaleResponse{}, err
+	}
 
 	// Bill number is keyed by calendar day in the pharmacy's timezone so same-day
 	// sales share one counter and the YYMMDD prefix matches the local date.
@@ -102,6 +110,7 @@ func sell(ctx context.Context, mdb *db.MongoDB, input models.SaleInput, fp strin
 			Change:             change,
 			SoldAt:             now,
 			KySkippedByCashier: input.KySkippedByCashier,
+			KyStatus:           ky.status,
 		}
 		res, err := mdb.Sales().InsertOne(txCtx, sale)
 		if err != nil {
@@ -130,6 +139,10 @@ func sell(ctx context.Context, mdb *db.MongoDB, input models.SaleInput, fp strin
 			if updateRes.MatchedCount == 0 {
 				return mongo.ErrNoDocuments
 			}
+		}
+
+		if err := recordKy(txCtx, mdb, ky, saleOID, now.Format(dayLayout), preparedItems, share); err != nil {
+			return err
 		}
 
 		billNo = generatedBillNo
@@ -171,6 +184,7 @@ func sell(ctx context.Context, mdb *db.MongoDB, input models.SaleInput, fp strin
 		BillNo: billNo, Discount: discount, Total: total, Change: change,
 		StockUpdates:       updates,
 		KySkippedByCashier: input.KySkippedByCashier,
+		KyStatus:           ky.status,
 	}, nil
 }
 
@@ -183,5 +197,6 @@ func saleResponse(sale models.Sale) models.SaleResponse {
 		Total:              sale.Total,
 		Change:             sale.Change,
 		KySkippedByCashier: sale.KySkippedByCashier,
+		KyStatus:           sale.KyStatus,
 	}
 }
