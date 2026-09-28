@@ -79,33 +79,12 @@ func recordReturn(ctx context.Context, mdb *db.MongoDB, oid bson.ObjectID, input
 		saleItemMap[si.ID.Hex()] = si
 	}
 
-	retCur, err := mdb.DrugReturns().Find(ctx, bson.M{"sale_id": oid})
-	if err != nil {
-		return models.DrugReturn{}, fmt.Errorf("failed to load existing returns: %w", err)
-	}
-	defer retCur.Close(ctx)
-	var existingReturns []models.DrugReturn
-	if err := retCur.All(ctx, &existingReturns); err != nil {
-		return models.DrugReturn{}, err
-	}
-
-	alreadyReturned := make(map[string]int)
-	for _, ret := range existingReturns {
-		for _, ri := range ret.Items {
-			alreadyReturned[ri.SaleItemID.Hex()] += ri.Qty
-		}
-	}
-
 	for _, inp := range input.Items {
-		si, ok := saleItemMap[inp.SaleItemID]
-		if !ok {
+		if _, ok := saleItemMap[inp.SaleItemID]; !ok {
 			return models.DrugReturn{}, invalid(fmt.Sprintf("sale item %s not found", inp.SaleItemID))
 		}
 		if inp.Qty <= 0 {
 			return models.DrugReturn{}, invalid("qty must be > 0")
-		}
-		if inp.Qty+alreadyReturned[inp.SaleItemID] > si.Qty {
-			return models.DrugReturn{}, invalid(fmt.Sprintf("คืนเกินจำนวนที่ขาย: %s (ขายไป %d, คืนแล้ว %d)", si.DrugName, si.Qty, alreadyReturned[inp.SaleItemID]))
 		}
 	}
 
@@ -128,28 +107,20 @@ func recordReturn(ctx context.Context, mdb *db.MongoDB, oid bson.ObjectID, input
 			}
 		}
 
+		requested := map[string]int{}
 		for _, inp := range input.Items {
-			si := saleItemMap[inp.SaleItemID]
-			if inp.Qty+currentReturned[inp.SaleItemID] > si.Qty {
-				return fmt.Errorf("คืนเกินจำนวนที่ขาย: %s (ขายไป %d, คืนแล้ว %d)", si.DrugName, si.Qty, currentReturned[inp.SaleItemID])
+			requested[inp.SaleItemID] += inp.Qty
+		}
+		for id, qty := range requested {
+			si := saleItemMap[id]
+			line := Returnable(si, currentReturned[id])
+			if qty <= line.Returnable {
+				continue
 			}
-			// Only units backed by a real lot can be returned — the unreconciled
-			// oversold portion has no lot to give back to, and the synthetic
-			// (adjustment-reconciled) portion was absorbed from bulk stock
-			// rather than a specific lot. Cap returnable at the sum of real
-			// LotSplits (non-zero LotID).
-			realLotQty := 0
-			for _, sp := range si.LotSplits {
-				if !sp.LotID.IsZero() {
-					realLotQty += sp.Qty
-				}
+			if line.Unlinked > 0 && qty <= si.Qty-line.Returned {
+				return invalid(fmt.Sprintf("ยา %s: คืนได้สูงสุด %d (มี %d หน่วยยังไม่ผูกกับล็อตจริง)", si.DrugName, line.Returnable, line.Unlinked))
 			}
-			if realLotQty < si.Qty {
-				if inp.Qty+currentReturned[inp.SaleItemID] > realLotQty {
-					pending := si.Qty - realLotQty
-					return fmt.Errorf("ยา %s: คืนได้สูงสุด %d (มี %d หน่วยยังไม่ผูกกับล็อตจริง)", si.DrugName, realLotQty, pending)
-				}
-			}
+			return invalid(fmt.Sprintf("คืนเกินจำนวนที่ขาย: %s (ขายไป %d, คืนแล้ว %d)", si.DrugName, si.Qty, line.Returned))
 		}
 
 		now := time.Now()
@@ -256,4 +227,64 @@ func paidShare(sale models.Sale) float64 {
 		return sale.Total / gross
 	}
 	return 1
+}
+
+// LineReturn is how much of a sale line has been and can still be returned,
+// in base units. Only units sold from a real lot can go back (ADR-0007):
+// Unlinked units (oversold, or reconciled from bulk stock) cannot.
+type LineReturn struct {
+	Returned   int
+	Returnable int
+	Unlinked   int
+}
+
+// Returnable applies the return rule to a sale line with returned units
+// already returned. Return enforces it and the sale's items report it. A
+// line of a drug without lots (no splits, nothing oversold) returns to stock
+// alone.
+func Returnable(item models.SaleItem, returned int) LineReturn {
+	unlinked := item.OversoldQty
+	for _, sp := range item.LotSplits {
+		if sp.LotID.IsZero() {
+			unlinked += sp.Qty
+		}
+	}
+	unlinked = min(unlinked, item.Qty)
+	return LineReturn{Returned: returned, Returnable: max(item.Qty-unlinked-returned, 0), Unlinked: unlinked}
+}
+
+// Lines lists a sale's items with what each can still return.
+func Lines(ctx context.Context, mdb *db.MongoDB, saleID string) ([]models.SaleLine, error) {
+	oid, err := bson.ObjectIDFromHex(saleID)
+	if err != nil {
+		return nil, invalid("invalid id")
+	}
+	var items []models.SaleItem
+	cur, err := mdb.SaleItems().Find(ctx, bson.M{"sale_id": oid})
+	if err != nil {
+		return nil, err
+	}
+	if err := cur.All(ctx, &items); err != nil {
+		return nil, err
+	}
+	var returns []models.DrugReturn
+	cur, err = mdb.DrugReturns().Find(ctx, bson.M{"sale_id": oid})
+	if err != nil {
+		return nil, err
+	}
+	if err := cur.All(ctx, &returns); err != nil {
+		return nil, err
+	}
+	returned := map[bson.ObjectID]int{}
+	for _, r := range returns {
+		for _, ri := range r.Items {
+			returned[ri.SaleItemID] += ri.Qty
+		}
+	}
+	out := make([]models.SaleLine, 0, len(items))
+	for _, it := range items {
+		l := Returnable(it, returned[it.ID])
+		out = append(out, models.SaleLine{SaleItem: it, ReturnedQty: l.Returned, ReturnableQty: l.Returnable, UnlinkedQty: l.Unlinked})
+	}
+	return out, nil
 }
