@@ -10,13 +10,13 @@ import (
 var kyTestTime = time.Date(2026, 5, 17, 9, 30, 0, 0, time.UTC)
 
 func TestBuildKy9PayloadTrimsSaleIDAndComputesTotal(t *testing.T) {
-	doc := buildKy9Payload(models.Ky9Input{
+	doc := models.Ky9Input{
 		SaleID:       "  abc123  ",
 		Date:         "2026-05-17",
 		DrugName:     "Paracetamol",
 		Qty:          4,
 		PricePerUnit: 12.5,
-	}, kyTestTime)
+	}.Record(kyTestTime)
 
 	if doc.SaleID != "abc123" {
 		t.Fatalf("expected SaleID to be trimmed to %q, got %q", "abc123", doc.SaleID)
@@ -30,7 +30,7 @@ func TestBuildKy9PayloadTrimsSaleIDAndComputesTotal(t *testing.T) {
 }
 
 func TestBuildKy9PayloadEmptySaleIDStaysEmpty(t *testing.T) {
-	doc := buildKy9Payload(models.Ky9Input{Qty: 1, PricePerUnit: 10}, kyTestTime)
+	doc := models.Ky9Input{Qty: 1, PricePerUnit: 10}.Record(kyTestTime)
 	if doc.SaleID != "" {
 		t.Fatalf("expected empty SaleID, got %q", doc.SaleID)
 	}

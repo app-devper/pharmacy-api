@@ -21,9 +21,12 @@ type Sale struct {
 	Change             float64        `bson:"change"         json:"change"`
 	SoldAt             time.Time      `bson:"sold_at"        json:"sold_at"`
 	KySkippedByCashier bool           `bson:"ky_skipped_by_cashier,omitempty" json:"ky_skipped_by_cashier,omitempty"`
-	Voided             bool           `bson:"voided,omitempty"       json:"voided,omitempty"`
-	VoidReason         string         `bson:"void_reason,omitempty"  json:"void_reason,omitempty"`
-	VoidedAt           *time.Time     `bson:"voided_at,omitempty"    json:"voided_at,omitempty"`
+	// KyStatus is how the sale met its KY obligations (ADR-0011); empty on
+	// sales recorded before it existed.
+	KyStatus   string     `bson:"ky_status,omitempty" json:"ky_status,omitempty"`
+	Voided     bool       `bson:"voided,omitempty"       json:"voided,omitempty"`
+	VoidReason string     `bson:"void_reason,omitempty"  json:"void_reason,omitempty"`
+	VoidedAt   *time.Time `bson:"voided_at,omitempty"    json:"voided_at,omitempty"`
 }
 
 // LotDeduction records one lot the FEFO engine pulled from when fulfilling a
@@ -107,6 +110,9 @@ type SaleInput struct {
 	Items              []SaleItemInput `json:"items"`
 	Discount           float64         `json:"discount"`
 	Received           float64         `json:"received"`
+	// Ky is what the cashier captured for the sale's KY forms (ADR-0011).
+	// Omitted by clients that still record KY forms separately.
+	Ky *SaleKyCapture `json:"ky,omitempty"`
 }
 
 // StockUpdate is an optimistic-update hint for the client: after a sale succeeds,
@@ -125,4 +131,15 @@ type SaleResponse struct {
 	Change             float64       `json:"change"`
 	StockUpdates       []StockUpdate `json:"stock_updates,omitempty"`
 	KySkippedByCashier bool          `json:"ky_skipped_by_cashier,omitempty"`
+	KyStatus           string        `json:"ky_status,omitempty"`
+}
+
+// SaleLine is a sale item with how much of it has been and can still be
+// returned, in base units (sales.Returnable).
+type SaleLine struct {
+	SaleItem
+	ReturnedQty   int `json:"returned_qty"`
+	ReturnableQty int `json:"returnable_qty"`
+	// UnlinkedQty units were not sold from a lot and cannot be returned.
+	UnlinkedQty int `json:"unlinked_qty"`
 }

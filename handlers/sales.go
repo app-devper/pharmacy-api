@@ -115,14 +115,8 @@ func (h *SaleHandler) Create(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, out)
 }
 
+// Items lists a sale's lines with what each can still return (sales.Lines).
 func (h *SaleHandler) Items(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	oid, err := bson.ObjectIDFromHex(id)
-	if err != nil {
-		jsonError(w, "invalid id", http.StatusBadRequest)
-		return
-	}
-
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
 		jsonError(w, "unauthorized client", http.StatusForbidden)
@@ -131,22 +125,12 @@ func (h *SaleHandler) Items(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	cur, err := mdb.SaleItems().Find(ctx, bson.M{"sale_id": oid})
+	lines, err := sales.Lines(ctx, mdb, chi.URLParam(r, "id"))
 	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
+		writeCommandError(w, err)
 		return
 	}
-	defer cur.Close(ctx)
-
-	var items []models.SaleItem
-	if err := cur.All(ctx, &items); err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if items == nil {
-		items = []models.SaleItem{}
-	}
-	jsonOK(w, items)
+	jsonOK(w, lines)
 }
 
 // Void cancels a sale: marks it voided, restores drug stock, reverses customer spend.

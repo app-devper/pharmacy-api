@@ -135,22 +135,6 @@ func kyFilter(month string) bson.M {
 	return bson.M{"date": bson.M{"$regex": "^" + regexp.QuoteMeta(month)}}
 }
 
-func buildKy9Payload(in models.Ky9Input, now time.Time) models.Ky9 {
-	return models.Ky9{
-		SaleID:       strings.TrimSpace(in.SaleID),
-		Date:         in.Date,
-		DrugName:     in.DrugName,
-		RegNo:        in.RegNo,
-		Unit:         in.Unit,
-		Qty:          in.Qty,
-		PricePerUnit: in.PricePerUnit,
-		TotalValue:   in.PricePerUnit * float64(in.Qty),
-		Seller:       in.Seller,
-		InvoiceNo:    in.InvoiceNo,
-		CreatedAt:    now,
-	}
-}
-
 func buildKy10Payload(in models.Ky10Input, now time.Time) models.Ky10 {
 	return models.Ky10{
 		SaleID:       strings.TrimSpace(in.SaleID),
@@ -247,7 +231,7 @@ func (h *KyHandler) AddKy9(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	doc := buildKy9Payload(input, time.Now())
+	doc := input.Record(time.Now())
 	res, err := mdb.Ky9().InsertOne(ctx, doc)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
