@@ -20,6 +20,7 @@ import (
 	"pharmacy-pos/backend/inventory"
 	mw "pharmacy-pos/backend/middleware"
 	"pharmacy-pos/backend/models"
+	"pharmacy-pos/backend/reporting"
 )
 
 type DrugHandler struct{ dbm *db.Manager }
@@ -611,12 +612,12 @@ func (h *DrugHandler) ReorderSuggestions(w http.ResponseWriter, r *http.Request)
 		lookahead = v
 	}
 
-	from := time.Now().AddDate(0, 0, -days)
-	totals, err := netTotalsByDrug(ctx, mdb, from, time.Time{})
+	lines, err := reporting.Lines(ctx, mdb, reporting.DayStart(time.Now(), mdb.Timezone(ctx)).AddDate(0, 0, -days), time.Time{})
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	totals := reporting.ByDrug(lines)
 	if len(totals) == 0 {
 		jsonOK(w, []models.ReorderSuggestion{})
 		return

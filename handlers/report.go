@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -19,36 +18,12 @@ import (
 	"pharmacy-pos/backend/db"
 	mw "pharmacy-pos/backend/middleware"
 	"pharmacy-pos/backend/models"
+	"pharmacy-pos/backend/reporting"
 )
 
 type ReportHandler struct{ dbm *db.Manager }
 
 func NewReportHandler(d *db.Manager) *ReportHandler { return &ReportHandler{dbm: d} }
-
-type saleItemReportRow struct {
-	DrugID       bson.ObjectID `bson:"drug_id"`
-	DrugName     string        `bson:"drug_name"`
-	Qty          int           `bson:"qty"`
-	Subtotal     float64       `bson:"subtotal"`
-	CostSubtotal float64       `bson:"cost_subtotal"`
-	At           time.Time     `bson:"at"`
-}
-
-type returnItemReportRow struct {
-	DrugID       bson.ObjectID `bson:"drug_id"`
-	DrugName     string        `bson:"drug_name"`
-	Qty          int           `bson:"qty"`
-	Subtotal     float64       `bson:"subtotal"`
-	CostSubtotal float64       `bson:"cost_subtotal"`
-	At           time.Time     `bson:"at"`
-}
-
-type netDrugTotals struct {
-	DrugName string
-	Qty      int
-	Revenue  float64
-	Cost     float64
-}
 
 func (h *ReportHandler) Summary(w http.ResponseWriter, r *http.Request) {
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
@@ -59,59 +34,41 @@ func (h *ReportHandler) Summary(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
+	summary, err := summaryNow(ctx, mdb)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, summary)
+}
+
+// summaryNow is today's and this month's net sales, today's bills, and the
+// stock summary, by the reporting rules (ADR-0008).
+func summaryNow(ctx context.Context, mdb *db.MongoDB) (models.ReportSummary, error) {
 	tz := mdb.Timezone(ctx)
-	now := time.Now().In(tz)
-	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, tz)
-	endOfDay := startOfDay.Add(24 * time.Hour)
-	startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, tz)
-
-	todaySales, err := netSalesAmount(ctx, mdb, startOfDay, endOfDay)
+	now := time.Now()
+	today := reporting.DayStart(now, tz)
+	tomorrow := today.AddDate(0, 0, 1)
+	todaySales, err := reporting.NetSales(ctx, mdb, today, tomorrow)
 	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
+		return models.ReportSummary{}, err
 	}
-	monthSales, err := netSalesAmount(ctx, mdb, startOfMonth, endOfDay)
+	monthSales, err := reporting.NetSales(ctx, mdb, reporting.MonthStart(now, tz), tomorrow)
 	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
+		return models.ReportSummary{}, err
 	}
-	todayBills, err := countDocs(ctx, mdb, bson.M{"sold_at": bson.M{"$gte": startOfDay, "$lt": endOfDay}})
+	todayBills, err := reporting.Bills(ctx, mdb, today, tomorrow)
 	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
+		return models.ReportSummary{}, err
 	}
-	stockValue, err := calcStockValue(ctx, mdb)
+	value, low, out, err := reporting.Stock(ctx, mdb, loadStockSettings(ctx, mdb).LowStockThreshold)
 	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
+		return models.ReportSummary{}, err
 	}
-	lowThreshold := loadStockSettings(ctx, mdb).LowStockThreshold
-	lowStock, err := countDrugs(ctx, mdb, bson.M{
-		"$expr": bson.M{"$and": bson.A{
-			bson.M{"$gt": bson.A{"$stock", 0}},
-			bson.M{"$lte": bson.A{"$stock", bson.M{"$cond": bson.A{
-				bson.M{"$gt": bson.A{"$min_stock", 0}}, "$min_stock", lowThreshold,
-			}}}},
-		}},
-	})
-	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	outStock, err := countDrugs(ctx, mdb, bson.M{"stock": 0})
-	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	jsonOK(w, models.ReportSummary{
-		TodaySales: todaySales,
-		TodayBills: int(todayBills),
-		MonthSales: monthSales,
-		StockValue: stockValue,
-		LowStock:   int(lowStock),
-		OutStock:   int(outStock),
-	})
+	return models.ReportSummary{
+		TodaySales: todaySales, TodayBills: todayBills, MonthSales: monthSales,
+		StockValue: value, LowStock: low, OutStock: out,
+	}, nil
 }
 
 func (h *ReportHandler) Daily(w http.ResponseWriter, r *http.Request) {
@@ -128,38 +85,13 @@ func (h *ReportHandler) Daily(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	sinceRaw := time.Now().AddDate(0, 0, -days)
-	since := time.Date(sinceRaw.Year(), sinceRaw.Month(), sinceRaw.Day(), 0, 0, 0, 0, sinceRaw.Location())
-	saleItems, err := loadSaleItemRows(ctx, mdb, since, time.Time{})
+	tz := mdb.Timezone(ctx)
+	lines, err := reporting.Lines(ctx, mdb, reporting.DayStart(time.Now(), tz).AddDate(0, 0, -days), time.Time{})
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	returnItems, err := loadReturnItemRows(ctx, mdb, since, time.Time{})
-	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	dayTotals := map[string]float64{}
-	for _, item := range saleItems {
-		dayTotals[item.At.Format("2006-01-02")] += item.Subtotal
-	}
-	for _, item := range returnItems {
-		dayTotals[item.At.Format("2006-01-02")] -= item.Subtotal
-	}
-
-	daysList := make([]string, 0, len(dayTotals))
-	for day := range dayTotals {
-		daysList = append(daysList, day)
-	}
-	sort.Strings(daysList)
-
-	result := make([]models.DailyData, 0, len(daysList))
-	for _, day := range daysList {
-		result = append(result, models.DailyData{Day: day, Total: dayTotals[day]})
-	}
-	jsonOK(w, result)
+	jsonOK(w, reporting.Daily(lines, tz))
 }
 
 // Eod is the End-of-day view of ?date= (default today): live for an open
@@ -218,11 +150,12 @@ func (h *ReportHandler) Profit(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	from, to := resolveReportRange(r, mdb.Timezone(ctx))
 
-	totals, err := netTotalsByDrug(ctx, mdb, from, to)
+	lines, err := reporting.Lines(ctx, mdb, from, to)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	totals := reporting.ByDrug(lines)
 
 	byDrug := make([]models.DrugProfit, 0, len(totals))
 	var summary models.ProfitSummary
@@ -250,13 +183,10 @@ func (h *ReportHandler) Profit(w http.ResponseWriter, r *http.Request) {
 	if summary.Revenue > 0 {
 		summary.Margin = summary.Profit / summary.Revenue * 100
 	}
-	bills, err := countDocs(ctx, mdb, bson.M{"sold_at": bson.M{"$gte": from, "$lte": to}})
-	if err != nil {
+	if summary.Bills, err = reporting.Bills(ctx, mdb, from, to); err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	summary.Bills = int(bills)
-
 	jsonOK(w, models.ProfitReport{Summary: summary, ByDrug: byDrug})
 }
 
@@ -274,15 +204,14 @@ func (h *ReportHandler) TopDrugs(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	since := time.Now().AddDate(0, 0, -days)
-	totals, err := netTotalsByDrug(ctx, mdb, since, time.Time{})
+	lines, err := reporting.Lines(ctx, mdb, reporting.DayStart(time.Now(), mdb.Timezone(ctx)).AddDate(0, 0, -days), time.Time{})
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	result := make([]models.TopDrug, 0, len(totals))
-	for drugID, total := range totals {
+	result := make([]models.TopDrug, 0)
+	for drugID, total := range reporting.ByDrug(lines) {
 		if total.Qty <= 0 && total.Revenue <= 0 {
 			continue
 		}
@@ -364,6 +293,12 @@ func (h *ReportHandler) SlowDrugs(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, result)
 }
 
+// monthsBack is the start of the month (months-1) months before now, so the
+// report covers `months` calendar months including the current one.
+func monthsBack(tz *time.Location, months int) time.Time {
+	return reporting.MonthStart(time.Now(), tz).AddDate(0, -(months - 1), 0)
+}
+
 func (h *ReportHandler) Monthly(w http.ResponseWriter, r *http.Request) {
 	months := 12
 	if m, err := strconv.Atoi(r.URL.Query().Get("months")); err == nil && m > 0 {
@@ -378,49 +313,13 @@ func (h *ReportHandler) Monthly(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
-	since := time.Now().AddDate(0, -months, 0)
-	saleItems, err := loadSaleItemRows(ctx, mdb, since, time.Time{})
+	tz := mdb.Timezone(ctx)
+	lines, err := reporting.Lines(ctx, mdb, monthsBack(tz, months), time.Time{})
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	returnItems, err := loadReturnItemRows(ctx, mdb, since, time.Time{})
-	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	monthsMap := map[string]*models.MonthlyData{}
-	for _, item := range saleItems {
-		key := item.At.Format("2006-01")
-		if monthsMap[key] == nil {
-			monthsMap[key] = &models.MonthlyData{Month: key}
-		}
-		monthsMap[key].Revenue += item.Subtotal
-		monthsMap[key].Cost += item.CostSubtotal
-	}
-	for _, item := range returnItems {
-		key := item.At.Format("2006-01")
-		if monthsMap[key] == nil {
-			monthsMap[key] = &models.MonthlyData{Month: key}
-		}
-		monthsMap[key].Revenue -= item.Subtotal
-		monthsMap[key].Cost -= item.CostSubtotal
-	}
-
-	keys := make([]string, 0, len(monthsMap))
-	for key := range monthsMap {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	result := make([]models.MonthlyData, 0, len(keys))
-	for _, key := range keys {
-		row := monthsMap[key]
-		row.Profit = row.Revenue - row.Cost
-		result = append(result, *row)
-	}
-	jsonOK(w, result)
+	jsonOK(w, reporting.Monthly(lines, tz))
 }
 
 // Dashboard bundles summary + daily + monthly + recent_sales into a single response
@@ -439,189 +338,54 @@ func (h *ReportHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
-
 	tz := mdb.Timezone(ctx)
-	now := time.Now().In(tz)
-	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, tz)
-	endOfDay := startOfDay.Add(24 * time.Hour)
-	startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, tz)
-	sinceDaily := startOfDay.AddDate(0, 0, -days)
-	sinceMonthly := now.AddDate(0, -12, 0)
 
-	var (
-		wg       sync.WaitGroup
-		mu       sync.Mutex
-		summary  models.ReportSummary
-		daily    []models.DailyData
-		monthly  []models.MonthlyData
-		recent   []models.Sale
-		firstErr error
-	)
-	setErr := func(e error) {
-		mu.Lock()
-		if firstErr == nil && e != nil {
-			firstErr = e
+	summary, err := summaryNow(ctx, mdb)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Load once from the earlier of the two chart windows.
+	since := monthsBack(tz, 12)
+	if d := reporting.DayStart(time.Now(), tz).AddDate(0, 0, -days); d.Before(since) {
+		since = d
+	}
+	lines, err := reporting.Lines(ctx, mdb, since, time.Time{})
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	dailyFrom := reporting.DayStart(time.Now(), tz).AddDate(0, 0, -days)
+	monthlyFrom := monthsBack(tz, 12)
+	var dailyLines, monthlyLines []reporting.Line
+	for _, l := range lines {
+		if !l.At.Before(dailyFrom) {
+			dailyLines = append(dailyLines, l)
 		}
-		mu.Unlock()
+		if !l.At.Before(monthlyFrom) {
+			monthlyLines = append(monthlyLines, l)
+		}
 	}
 
-	// (1) Summary
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		todaySales, err := netSalesAmount(ctx, mdb, startOfDay, endOfDay)
-		if err != nil {
-			setErr(err)
-			return
-		}
-		monthSales, err := netSalesAmount(ctx, mdb, startOfMonth, endOfDay)
-		if err != nil {
-			setErr(err)
-			return
-		}
-		todayBills, err := countDocs(ctx, mdb, bson.M{"sold_at": bson.M{"$gte": startOfDay, "$lt": endOfDay}})
-		if err != nil {
-			setErr(err)
-			return
-		}
-		stockValue, err := calcStockValue(ctx, mdb)
-		if err != nil {
-			setErr(err)
-			return
-		}
-		lowThreshold := loadStockSettings(ctx, mdb).LowStockThreshold
-		lowStock, err := countDrugs(ctx, mdb, bson.M{
-			"$expr": bson.M{"$and": bson.A{
-				bson.M{"$gt": bson.A{"$stock", 0}},
-				bson.M{"$lte": bson.A{"$stock", bson.M{"$cond": bson.A{
-					bson.M{"$gt": bson.A{"$min_stock", 0}}, "$min_stock", lowThreshold,
-				}}}},
-			}},
-		})
-		if err != nil {
-			setErr(err)
-			return
-		}
-		outStock, err := countDrugs(ctx, mdb, bson.M{"stock": 0})
-		if err != nil {
-			setErr(err)
-			return
-		}
-		summary = models.ReportSummary{
-			TodaySales: todaySales, TodayBills: int(todayBills), MonthSales: monthSales,
-			StockValue: stockValue, LowStock: int(lowStock), OutStock: int(outStock),
-		}
-	}()
-
-	// (2) Daily (last N days)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		saleItems, err := loadSaleItemRows(ctx, mdb, sinceDaily, time.Time{})
-		if err != nil {
-			setErr(err)
-			return
-		}
-		returnItems, err := loadReturnItemRows(ctx, mdb, sinceDaily, time.Time{})
-		if err != nil {
-			setErr(err)
-			return
-		}
-		dayTotals := map[string]float64{}
-		for _, it := range saleItems {
-			dayTotals[it.At.Format("2006-01-02")] += it.Subtotal
-		}
-		for _, it := range returnItems {
-			dayTotals[it.At.Format("2006-01-02")] -= it.Subtotal
-		}
-		keys := make([]string, 0, len(dayTotals))
-		for k := range dayTotals {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		daily = make([]models.DailyData, 0, len(keys))
-		for _, k := range keys {
-			daily = append(daily, models.DailyData{Day: k, Total: dayTotals[k]})
-		}
-	}()
-
-	// (3) Monthly (last 12 months)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		saleItems, err := loadSaleItemRows(ctx, mdb, sinceMonthly, time.Time{})
-		if err != nil {
-			setErr(err)
-			return
-		}
-		returnItems, err := loadReturnItemRows(ctx, mdb, sinceMonthly, time.Time{})
-		if err != nil {
-			setErr(err)
-			return
-		}
-		monthsMap := map[string]*models.MonthlyData{}
-		for _, it := range saleItems {
-			k := it.At.Format("2006-01")
-			if monthsMap[k] == nil {
-				monthsMap[k] = &models.MonthlyData{Month: k}
-			}
-			monthsMap[k].Revenue += it.Subtotal
-			monthsMap[k].Cost += it.CostSubtotal
-		}
-		for _, it := range returnItems {
-			k := it.At.Format("2006-01")
-			if monthsMap[k] == nil {
-				monthsMap[k] = &models.MonthlyData{Month: k}
-			}
-			monthsMap[k].Revenue -= it.Subtotal
-			monthsMap[k].Cost -= it.CostSubtotal
-		}
-		keys := make([]string, 0, len(monthsMap))
-		for k := range monthsMap {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		monthly = make([]models.MonthlyData, 0, len(keys))
-		for _, k := range keys {
-			row := monthsMap[k]
-			row.Profit = row.Revenue - row.Cost
-			monthly = append(monthly, *row)
-		}
-	}()
-
-	// (4) Recent 5 sales
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		cur, err := mdb.Sales().Find(ctx, bson.M{},
-			options.Find().SetSort(bson.D{{Key: "sold_at", Value: -1}}).SetLimit(5),
-		)
-		if err != nil {
-			setErr(err)
-			return
-		}
-		defer cur.Close(ctx)
-		var sales []models.Sale
-		if err := cur.All(ctx, &sales); err != nil {
-			setErr(err)
-			return
-		}
-		if sales == nil {
-			sales = []models.Sale{}
-		}
-		recent = sales
-	}()
-
-	wg.Wait()
-	if firstErr != nil {
-		jsonError(w, firstErr.Error(), http.StatusInternalServerError)
+	var recent []models.Sale
+	cur, err := mdb.Sales().Find(ctx, bson.M{"voided": bson.M{"$ne": true}},
+		options.Find().SetSort(bson.D{{Key: "sold_at", Value: -1}}).SetLimit(5),
+	)
+	if err == nil {
+		err = cur.All(ctx, &recent)
+	}
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if recent == nil {
+		recent = []models.Sale{}
 	}
 
 	jsonOK(w, models.Dashboard{
 		Summary:     summary,
-		Daily:       daily,
-		Monthly:     monthly,
+		Daily:       reporting.Daily(dailyLines, tz),
+		Monthly:     reporting.Monthly(monthlyLines, tz),
 		RecentSales: recent,
 	})
 }
@@ -634,10 +398,11 @@ func notVoided(filter bson.M) bson.M {
 	return merged
 }
 
+// resolveReportRange is [from, to) from ?from=&to= (dates, to inclusive).
 func resolveReportRange(r *http.Request, tz *time.Location) (time.Time, time.Time) {
 	now := time.Now().In(tz)
 	from := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, tz)
-	to := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 999999999, tz)
+	to := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, tz).AddDate(0, 0, 1)
 
 	if s := r.URL.Query().Get("from"); s != "" {
 		if t, err := time.ParseInLocation("2006-01-02", s, tz); err == nil {
@@ -646,210 +411,8 @@ func resolveReportRange(r *http.Request, tz *time.Location) (time.Time, time.Tim
 	}
 	if s := r.URL.Query().Get("to"); s != "" {
 		if t, err := time.ParseInLocation("2006-01-02", s, tz); err == nil {
-			to = time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, tz)
+			to = t.AddDate(0, 0, 1)
 		}
 	}
 	return from, to
-}
-
-func loadSaleItemRows(ctx context.Context, d *db.MongoDB, from, to time.Time) ([]saleItemReportRow, error) {
-	match := bson.M{}
-	if !from.IsZero() || !to.IsZero() {
-		dateFilter := bson.M{}
-		if !from.IsZero() {
-			dateFilter["$gte"] = from
-		}
-		if !to.IsZero() {
-			dateFilter["$lte"] = to
-		}
-		match["sold_at"] = dateFilter
-	}
-
-	pipeline := bson.A{
-		bson.M{"$match": notVoided(match)},
-		bson.M{"$lookup": bson.M{
-			"from":         "sale_items",
-			"localField":   "_id",
-			"foreignField": "sale_id",
-			"as":           "items",
-		}},
-		bson.M{"$unwind": "$items"},
-		bson.M{"$project": bson.M{
-			"drug_id":       "$items.drug_id",
-			"drug_name":     "$items.drug_name",
-			"qty":           "$items.qty",
-			"subtotal":      "$items.subtotal",
-			"cost_subtotal": bson.M{"$ifNull": bson.A{"$items.cost_subtotal", 0}},
-			"at":            "$sold_at",
-		}},
-	}
-
-	cur, err := d.Sales().Aggregate(ctx, pipeline)
-	if err != nil {
-		return nil, err
-	}
-	defer cur.Close(ctx)
-
-	var rows []saleItemReportRow
-	if err := cur.All(ctx, &rows); err != nil {
-		return nil, err
-	}
-	return rows, nil
-}
-
-func loadReturnItemRows(ctx context.Context, d *db.MongoDB, from, to time.Time) ([]returnItemReportRow, error) {
-	match := bson.M{}
-	if !from.IsZero() || !to.IsZero() {
-		dateFilter := bson.M{}
-		if !from.IsZero() {
-			dateFilter["$gte"] = from
-		}
-		if !to.IsZero() {
-			dateFilter["$lte"] = to
-		}
-		match["returned_at"] = dateFilter
-	}
-
-	pipeline := bson.A{
-		bson.M{"$match": match},
-		bson.M{"$unwind": "$items"},
-		bson.M{"$project": bson.M{
-			"drug_id":       "$items.drug_id",
-			"drug_name":     "$items.drug_name",
-			"qty":           "$items.qty",
-			"subtotal":      "$items.subtotal",
-			"cost_subtotal": bson.M{"$ifNull": bson.A{"$items.cost_subtotal", 0}},
-			"at":            "$returned_at",
-		}},
-	}
-
-	cur, err := d.DrugReturns().Aggregate(ctx, pipeline)
-	if err != nil {
-		return nil, err
-	}
-	defer cur.Close(ctx)
-
-	var rows []returnItemReportRow
-	if err := cur.All(ctx, &rows); err != nil {
-		return nil, err
-	}
-	return rows, nil
-}
-
-func netTotalsByDrug(ctx context.Context, d *db.MongoDB, from, to time.Time) (map[bson.ObjectID]*netDrugTotals, error) {
-	saleItems, err := loadSaleItemRows(ctx, d, from, to)
-	if err != nil {
-		return nil, err
-	}
-	returnItems, err := loadReturnItemRows(ctx, d, from, to)
-	if err != nil {
-		return nil, err
-	}
-
-	totals := map[bson.ObjectID]*netDrugTotals{}
-	for _, item := range saleItems {
-		if totals[item.DrugID] == nil {
-			totals[item.DrugID] = &netDrugTotals{DrugName: item.DrugName}
-		}
-		totals[item.DrugID].Qty += item.Qty
-		totals[item.DrugID].Revenue += item.Subtotal
-		totals[item.DrugID].Cost += item.CostSubtotal
-	}
-	for _, item := range returnItems {
-		if totals[item.DrugID] == nil {
-			totals[item.DrugID] = &netDrugTotals{DrugName: item.DrugName}
-		}
-		totals[item.DrugID].Qty -= item.Qty
-		totals[item.DrugID].Revenue -= item.Subtotal
-		totals[item.DrugID].Cost -= item.CostSubtotal
-	}
-	return totals, nil
-}
-
-func netSalesAmount(ctx context.Context, d *db.MongoDB, from, to time.Time) (float64, error) {
-	sales, err := sumSales(ctx, d, bson.M{"sold_at": bson.M{"$gte": from, "$lt": to}})
-	if err != nil {
-		return 0, err
-	}
-	returns, err := sumReturnRefunds(ctx, d, from, to)
-	if err != nil {
-		return 0, err
-	}
-	return sales - returns, nil
-}
-
-func sumSales(ctx context.Context, d *db.MongoDB, filter bson.M) (float64, error) {
-	pipeline := bson.A{
-		bson.M{"$match": notVoided(filter)},
-		bson.M{"$group": bson.M{"_id": nil, "total": bson.M{"$sum": "$total"}}},
-	}
-	cur, err := d.Sales().Aggregate(ctx, pipeline)
-	if err != nil {
-		return 0, err
-	}
-	defer cur.Close(ctx)
-	var res []struct {
-		Total float64 `bson:"total"`
-	}
-	if err := cur.All(ctx, &res); err != nil {
-		return 0, err
-	}
-	if len(res) == 0 {
-		return 0, nil
-	}
-	return res[0].Total, nil
-}
-
-func sumReturnRefunds(ctx context.Context, d *db.MongoDB, from, to time.Time) (float64, error) {
-	pipeline := bson.A{
-		bson.M{"$match": bson.M{"returned_at": bson.M{"$gte": from, "$lt": to}}},
-		bson.M{"$group": bson.M{"_id": nil, "total": bson.M{"$sum": "$refund"}}},
-	}
-	cur, err := d.DrugReturns().Aggregate(ctx, pipeline)
-	if err != nil {
-		return 0, err
-	}
-	defer cur.Close(ctx)
-	var res []struct {
-		Total float64 `bson:"total"`
-	}
-	if err := cur.All(ctx, &res); err != nil {
-		return 0, err
-	}
-	if len(res) == 0 {
-		return 0, nil
-	}
-	return res[0].Total, nil
-}
-
-func countDocs(ctx context.Context, d *db.MongoDB, filter bson.M) (int64, error) {
-	return d.Sales().CountDocuments(ctx, notVoided(filter))
-}
-
-func countDrugs(ctx context.Context, d *db.MongoDB, filter bson.M) (int64, error) {
-	return d.Drugs().CountDocuments(ctx, filter)
-}
-
-func calcStockValue(ctx context.Context, d *db.MongoDB) (float64, error) {
-	pipeline := bson.A{
-		bson.M{"$group": bson.M{
-			"_id":   nil,
-			"total": bson.M{"$sum": bson.M{"$multiply": bson.A{"$cost_price", "$stock"}}},
-		}},
-	}
-	cur, err := d.Drugs().Aggregate(ctx, pipeline)
-	if err != nil {
-		return 0, err
-	}
-	defer cur.Close(ctx)
-	var res []struct {
-		Total float64 `bson:"total"`
-	}
-	if err := cur.All(ctx, &res); err != nil {
-		return 0, err
-	}
-	if len(res) == 0 {
-		return 0, nil
-	}
-	return res[0].Total, nil
 }
