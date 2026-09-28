@@ -230,6 +230,9 @@ func GiveBack(txCtx context.Context, mdb *db.MongoDB, item models.SaleItem, qty,
 // oversold debt from it, oldest sale first. Call inside a transaction.
 func ReceiveLot(txCtx context.Context, mdb *db.MongoDB, lot models.DrugLot) (models.DrugLot, error) {
 	lot.Remaining = lot.Quantity
+	if lot.Origin == "" {
+		lot.Origin = models.LotReceived
+	}
 	if lot.CreatedAt.IsZero() {
 		lot.CreatedAt = time.Now()
 	}

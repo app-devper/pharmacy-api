@@ -28,7 +28,17 @@ type DrugLot struct {
 	WrittenOffAt *time.Time `bson:"written_off_at,omitempty" json:"written_off_at,omitempty"`
 	// NoExpiry marks opening stock imported without lot data (bulk import).
 	NoExpiry bool `bson:"no_expiry,omitempty" json:"no_expiry,omitempty"`
+	// Origin says how the lot came into stock (ADR-0010); empty on lots made
+	// before it was recorded.
+	Origin string `bson:"origin,omitempty" json:"origin,omitempty"`
 }
+
+// Lot origins (ADR-0010).
+const (
+	LotReceived   = "received"   // goods received: a confirmed import or a lot added by hand
+	LotOpening    = "opening"    // stock a drug was created with
+	LotAdjustment = "adjustment" // created by a stock increase naming a new lot
+)
 
 // ExpiringLotItem is returned by GET /api/pharmacy/v1/lots/expiring.
 type ExpiringLotItem struct {
@@ -54,7 +64,12 @@ type LotWriteoff struct {
 	LotID      bson.ObjectID `bson:"lot_id,omitempty" json:"lot_id,omitempty"`
 	// Reason is "writeoff" (default) or "deleted" for a lot entered by mistake.
 	Reason string `bson:"reason,omitempty" json:"reason,omitempty"`
-	By     string `bson:"by,omitempty"     json:"by,omitempty"`
+	// Received is, for a deleted lot, the quantity its receipt put into
+	// stock; that receipt drops out of the movements view with the lot.
+	// Nil on deletions recorded before it existed, which undid exactly their
+	// receipt.
+	Received *int   `bson:"received,omitempty" json:"received,omitempty"`
+	By       string `bson:"by,omitempty"     json:"by,omitempty"`
 }
 
 // DrugLotInput is the POST body for creating a lot.

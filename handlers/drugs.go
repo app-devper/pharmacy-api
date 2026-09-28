@@ -332,7 +332,7 @@ func (h *DrugHandler) Add(w http.ResponseWriter, r *http.Request) {
 			lot.SellPrice = &lotPrice
 		}
 
-		if _, err := mdb.DrugLots().InsertOne(txCtx, lot); err != nil {
+		if err := inventory.OpenStock(txCtx, mdb, lot); err != nil {
 			return fmt.Errorf("create lot failed: %w", err)
 		}
 		return nil
@@ -520,8 +520,7 @@ func (h *DrugHandler) BulkImport(w http.ResponseWriter, r *http.Request) {
 			if drug.Stock <= 0 {
 				return nil
 			}
-			_, err = mdb.DrugLots().InsertOne(txCtx, inventory.OpeningLot(drug))
-			return err
+			return inventory.OpenStock(txCtx, mdb, inventory.OpeningLot(drug))
 		})
 		cancel()
 		if err != nil {
