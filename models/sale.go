@@ -126,3 +126,13 @@ type SaleResponse struct {
 	StockUpdates       []StockUpdate `json:"stock_updates,omitempty"`
 	KySkippedByCashier bool          `json:"ky_skipped_by_cashier,omitempty"`
 }
+
+// SaleLine is a sale item with how much of it has been and can still be
+// returned, in base units (sales.Returnable).
+type SaleLine struct {
+	SaleItem
+	ReturnedQty   int `json:"returned_qty"`
+	ReturnableQty int `json:"returnable_qty"`
+	// UnlinkedQty units were not sold from a lot and cannot be returned.
+	UnlinkedQty int `json:"unlinked_qty"`
+}
