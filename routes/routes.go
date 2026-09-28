@@ -148,6 +148,10 @@ func Setup(
 				// Whole-bill void
 				r.Post("/sales/{id}/void", sh.Void)
 
+				// Queued sales and KY forms closed without recording (ADR-0009)
+				r.Post("/sales/abandon", sh.Abandon)
+				r.Get("/sales/abandoned", sh.Abandoned)
+
 				// Financial and customer-identifying reports
 				r.Get("/report/summary", rh.Summary)
 				r.Get("/report/dashboard", rh.Dashboard)

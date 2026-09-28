@@ -33,14 +33,7 @@ func Sell(ctx context.Context, mdb *db.MongoDB, input models.SaleInput) (out mod
 		if err := mdb.Sales().FindOne(ctx, bson.M{"client_request_id": input.ClientRequestID}).Decode(&sale); err != nil {
 			return models.SaleResponse{}, "", err
 		}
-		return models.SaleResponse{
-			ID:                 sale.ID.Hex(),
-			BillNo:             sale.BillNo,
-			Discount:           sale.Discount,
-			Total:              sale.Total,
-			Change:             sale.Change,
-			KySkippedByCashier: sale.KySkippedByCashier,
-		}, sale.RequestFingerprint, nil
+		return saleResponse(sale), sale.RequestFingerprint, nil
 	}
 	return runOnce(ctx, input.ClientRequestID, fp, find, func() (models.SaleResponse, error) {
 		return sell(ctx, mdb, input, fp)
@@ -88,6 +81,9 @@ func sell(ctx context.Context, mdb *db.MongoDB, input models.SaleInput, fp strin
 		requestFp = fp
 	}
 	if err := mdb.WithTransaction(ctx, func(txCtx context.Context) error {
+		if err := refuseAbandoned(txCtx, mdb, input.ClientRequestID); err != nil {
+			return err
+		}
 		now := time.Now().In(tz)
 		generatedBillNo, err := nextSaleBillNo(txCtx, mdb, now)
 		if err != nil {
@@ -176,4 +172,16 @@ func sell(ctx context.Context, mdb *db.MongoDB, input models.SaleInput, fp strin
 		StockUpdates:       updates,
 		KySkippedByCashier: input.KySkippedByCashier,
 	}, nil
+}
+
+// saleResponse is a recorded sale as a Sell outcome, without stock updates.
+func saleResponse(sale models.Sale) models.SaleResponse {
+	return models.SaleResponse{
+		ID:                 sale.ID.Hex(),
+		BillNo:             sale.BillNo,
+		Discount:           sale.Discount,
+		Total:              sale.Total,
+		Change:             sale.Change,
+		KySkippedByCashier: sale.KySkippedByCashier,
+	}
 }
