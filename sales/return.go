@@ -176,7 +176,9 @@ func recordReturn(ctx context.Context, mdb *db.MongoDB, oid bson.ObjectID, input
 			si := saleItemMap[inp.SaleItemID]
 			siOID, _ := bson.ObjectIDFromHex(inp.SaleItemID)
 
-			subtotal := float64(inp.Qty) * si.Price
+			// The customer paid each line's share of the bill after its bill
+			// discount; a return refunds that share (ADR-0008).
+			subtotal := float64(inp.Qty) * si.Price * paidShare(sale)
 			costSubtotal := 0.0
 			if si.Qty > 0 {
 				costSubtotal = (si.CostSubtotal / float64(si.Qty)) * float64(inp.Qty)
@@ -245,4 +247,13 @@ func recordReturn(ctx context.Context, mdb *db.MongoDB, oid bson.ObjectID, input
 		return models.DrugReturn{}, err
 	}
 	return ret, nil
+}
+
+// paidShare is the fraction of each line's subtotal the customer paid once the
+// bill discount is spread over the bill's lines.
+func paidShare(sale models.Sale) float64 {
+	if gross := sale.Total + sale.Discount; gross > 0 {
+		return sale.Total / gross
+	}
+	return 1
 }
