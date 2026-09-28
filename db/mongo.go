@@ -212,6 +212,15 @@ func (m *MongoDB) EodAdjustments() *mongo.Collection   { return m.db.Collection(
 // commit without one seeing the other (ADR-0006).
 func (m *MongoDB) EodDays() *mongo.Collection { return m.db.Collection("eod_days") }
 
+// Abandonments records queued sales and KY forms the pharmacy closed without
+// recording (ADR-0009).
+func (m *MongoDB) Abandonments() *mongo.Collection { return m.db.Collection("abandonments") }
+
+// RequestGuards holds one guard document per client request id. Selling and
+// abandoning the same queued sale both write it, so they cannot both commit
+// (ADR-0009).
+func (m *MongoDB) RequestGuards() *mongo.Collection { return m.db.Collection("request_guards") }
+
 // ensureInitialized runs index creation for a tenant exactly once, best-effort.
 // Errors are logged but never propagated, so a single bad index (e.g. a unique
 // constraint violation on legacy data) cannot block the tenant's API.
@@ -250,6 +259,13 @@ func (m *MongoDB) CreateIndexes(ctx context.Context) error {
 		Options: options.Index().SetUnique(true).SetPartialFilterExpression(
 			bson.M{"client_request_id": bson.M{"$type": "string", "$gt": ""}},
 		),
+	}); err != nil {
+		return err
+	}
+	// One abandonment per kind and client request (ADR-0009).
+	if _, err := m.Abandonments().Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "kind", Value: 1}, {Key: "client_request_id", Value: 1}},
+		Options: options.Index().SetUnique(true),
 	}); err != nil {
 		return err
 	}

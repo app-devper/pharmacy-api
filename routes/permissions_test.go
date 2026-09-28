@@ -62,6 +62,8 @@ var minimumRole = map[string]string{
 	"POST /api/pharmacy/v1/drugs/bulk":       RoleADMIN,
 	"PUT /api/pharmacy/v1/drugs/{id}":        RoleADMIN,
 	"POST /api/pharmacy/v1/sales/{id}/void":  RoleADMIN,
+	"POST /api/pharmacy/v1/sales/abandon":    RoleADMIN,
+	"GET /api/pharmacy/v1/sales/abandoned":   RoleADMIN,
 	"GET /api/pharmacy/v1/report/summary":    RoleADMIN,
 	"GET /api/pharmacy/v1/report/dashboard":  RoleADMIN,
 	"GET /api/pharmacy/v1/report/daily":      RoleADMIN,
