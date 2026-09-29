@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"regexp"
-	"sync"
 	"time"
+
+	"github.com/app-devper/um-api/servicekit/tenant"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -15,19 +15,11 @@ import (
 	"pharmacy-pos/backend/models"
 )
 
-// validClientID allows only alphanumeric, underscore, and hyphen characters.
-var validClientID = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
-
 // MongoDB wraps a single database instance and its collections.
 type MongoDB struct {
 	client               *mongo.Client
 	db                   *mongo.Database
 	supportsTransactions bool
-}
-
-type tenantDB struct {
-	db       *MongoDB
-	initOnce sync.Once
 }
 
 // Manager holds one mongo.Client and a per-clientId database cache.
@@ -36,7 +28,10 @@ type Manager struct {
 	client               *mongo.Client
 	dbPrefix             string
 	supportsTransactions bool
-	cache                sync.Map // map[clientId string]*tenantDB
+	// tenants keeps one database per client id (um-api servicekit, its
+	// ADR-0007); index creation runs on first use and a failure is retried
+	// at most once a minute without blocking the tenant.
+	tenants *tenant.Registry[*MongoDB]
 }
 
 // NewManager connects to MongoDB and returns a Manager.
@@ -64,11 +59,23 @@ func NewManager(uri, dbPrefix string) *Manager {
 	if !supportsTransactions {
 		log.Println("MongoDB transactions unavailable; falling back to non-transactional writes")
 	}
-	return &Manager{
+	m := &Manager{
 		client:               client,
 		dbPrefix:             dbPrefix,
 		supportsTransactions: supportsTransactions,
 	}
+	m.tenants = tenant.New(dbPrefix, m.open, func(ctx context.Context, clientID string, d *MongoDB) error {
+		if err := d.CreateIndexes(ctx); err != nil {
+			return err
+		}
+		log.Printf("Opened database %q for client %q", d.db.Name(), clientID)
+		return nil
+	})
+	return m
+}
+
+func (m *Manager) open(name string) *MongoDB {
+	return &MongoDB{client: m.client, db: m.client.Database(name), supportsTransactions: m.supportsTransactions}
 }
 
 // ForClient returns (and caches) a *MongoDB for the given clientId.
@@ -76,57 +83,14 @@ func NewManager(uri, dbPrefix string) *Manager {
 // All other clientIds          → database = "<dbPrefix>_<clientId>" (e.g. "pharmacy_abc")
 // Returns an error if clientID is empty or contains illegal characters.
 func (m *Manager) ForClient(clientID string) (*MongoDB, error) {
-	if clientID == "" {
-		return nil, fmt.Errorf("clientId is required")
-	}
-	if clientID != "000" && !validClientID.MatchString(clientID) {
-		return nil, fmt.Errorf("invalid clientId %q", clientID)
-	}
-
-	if v, ok := m.cache.Load(clientID); ok {
-		entry := v.(*tenantDB)
-		entry.ensureInitialized(clientID)
-		return entry.db, nil
-	}
-
-	var dbName string
-	if clientID == "000" {
-		dbName = m.dbPrefix // "pharmacy"
-	} else {
-		dbName = fmt.Sprintf("%s_%s", m.dbPrefix, clientID) // "pharmacy_abc"
-	}
-	d := &MongoDB{
-		client:               m.client,
-		db:                   m.client.Database(dbName),
-		supportsTransactions: m.supportsTransactions,
-	}
-	entry := &tenantDB{db: d}
-	actual, _ := m.cache.LoadOrStore(clientID, entry)
-	entry = actual.(*tenantDB)
-	entry.ensureInitialized(clientID)
-	return entry.db, nil
+	return m.tenants.For(clientID)
 }
 
-// forClientNoInit returns a *MongoDB without running tenant initialization.
-// Used internally for bootstrap paths that manage initialization explicitly.
 func (m *Manager) forClientNoInit(clientID string) (*MongoDB, error) {
-	if clientID == "" {
-		return nil, fmt.Errorf("clientId is required")
+	if err := tenant.ValidateClientID(clientID); err != nil {
+		return nil, err
 	}
-	if clientID != "000" && !validClientID.MatchString(clientID) {
-		return nil, fmt.Errorf("invalid clientId %q", clientID)
-	}
-	var dbName string
-	if clientID == "000" {
-		dbName = m.dbPrefix
-	} else {
-		dbName = fmt.Sprintf("%s_%s", m.dbPrefix, clientID)
-	}
-	return &MongoDB{
-		client:               m.client,
-		db:                   m.client.Database(dbName),
-		supportsTransactions: m.supportsTransactions,
-	}, nil
+	return m.open(tenant.DatabaseName(m.dbPrefix, clientID)), nil
 }
 
 // CreateIndexesForClient creates indexes on the given clientId's database.
@@ -136,17 +100,9 @@ func (m *Manager) CreateIndexesForClient(ctx context.Context, clientID string) e
 	if err != nil {
 		return err
 	}
-	if err := d.CreateIndexes(ctx); err != nil {
-		return err
-	}
-	// Mark the tenant as initialized in the cache so request-path callers
-	// don't re-run CreateIndexes.
-	entry := &tenantDB{db: d}
-	entry.initOnce.Do(func() {
-		log.Printf("Opened database %q for client %q", d.db.Name(), clientID)
-	})
-	m.cache.LoadOrStore(clientID, entry)
-	return nil
+	// The request path creates them again on first use; creating an index
+	// that exists is a no-op.
+	return d.CreateIndexes(ctx)
 }
 
 // SeedForClient seeds initial data on the given clientId's database (no-op if already seeded).
@@ -220,21 +176,6 @@ func (m *MongoDB) Abandonments() *mongo.Collection { return m.db.Collection("aba
 // abandoning the same queued sale both write it, so they cannot both commit
 // (ADR-0009).
 func (m *MongoDB) RequestGuards() *mongo.Collection { return m.db.Collection("request_guards") }
-
-// ensureInitialized runs index creation for a tenant exactly once, best-effort.
-// Errors are logged but never propagated, so a single bad index (e.g. a unique
-// constraint violation on legacy data) cannot block the tenant's API.
-// Bootstrap paths that want fail-fast behavior should call Manager.CreateIndexesForClient instead.
-func (t *tenantDB) ensureInitialized(clientID string) {
-	t.initOnce.Do(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := t.db.CreateIndexes(ctx); err != nil {
-			log.Printf("tenant %q: index creation reported error (continuing): %v", clientID, err)
-		}
-		log.Printf("Opened database %q for client %q", t.db.db.Name(), clientID)
-	})
-}
 
 func (m *MongoDB) CreateIndexes(ctx context.Context) error {
 	// Unique index on sales.bill_no
