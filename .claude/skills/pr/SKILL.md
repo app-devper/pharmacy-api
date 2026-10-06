@@ -44,6 +44,9 @@ Feature PRs target `develop`; release/hotfix PRs target `main` (see
    git checkout develop && git pull --ff-only origin develop
    git merge main && git push origin develop
    ```
+   Pushed directly on purpose (admin only; GitHub reports
+   "Bypassed rule violations" — expected). Then check
+   `gh run list --branch develop -L 1` is green.
    The merge into `main` has started the deploy — follow `dev-flow` stage 8 to tag and check it.
 
 7. **Report**: PR number + URL, squash commit SHA on the base branch, branch
