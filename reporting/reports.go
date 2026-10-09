@@ -9,6 +9,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	"pharmacy-pos/backend/calendar"
 	"pharmacy-pos/backend/db"
 	"pharmacy-pos/backend/inventory"
 	"pharmacy-pos/backend/models"
@@ -20,26 +21,25 @@ import (
 
 // lastDays is [start of the day `days` days before today, open).
 func lastDays(now time.Time, tz *time.Location, days int) time.Time {
-	return DayStart(now, tz).AddDate(0, 0, -days)
+	return calendar.DayStart(now, tz).AddDate(0, 0, -days)
 }
 
 // lastMonths is the start of the month (months-1) months back, so the window
 // covers `months` calendar months including the current one.
 func lastMonths(now time.Time, tz *time.Location, months int) time.Time {
-	return monthStart(now, tz).AddDate(0, -(months - 1), 0)
+	return calendar.MonthStart(now, tz).AddDate(0, -(months - 1), 0)
 }
 
 // DateRange is [from, to) from inclusive YYYY-MM-DD dates in the pharmacy's
 // calendar. An empty or malformed from is the first of this month; an empty
 // or malformed to is today.
 func DateRange(now time.Time, tz *time.Location, from, to string) (time.Time, time.Time) {
-	start := monthStart(now, tz)
-	end := DayStart(now, tz).AddDate(0, 0, 1)
-	if t, err := time.ParseInLocation(dayLayout, from, tz); err == nil {
-		start = t
+	start, end := calendar.Dates(tz, from, to)
+	if start.IsZero() {
+		start = calendar.MonthStart(now, tz)
 	}
-	if t, err := time.ParseInLocation(dayLayout, to, tz); err == nil {
-		end = t.AddDate(0, 0, 1)
+	if end.IsZero() {
+		end = calendar.DayStart(now, tz).AddDate(0, 0, 1)
 	}
 	return start, end
 }
@@ -52,13 +52,13 @@ func Summary(ctx context.Context, mdb *db.MongoDB, now time.Time, lowStock int) 
 }
 
 func summary(ctx context.Context, mdb *db.MongoDB, now time.Time, tz *time.Location, lowStock int) (models.ReportSummary, error) {
-	today := DayStart(now, tz)
+	today := calendar.DayStart(now, tz)
 	tomorrow := today.AddDate(0, 0, 1)
 	todaySales, err := netSales(ctx, mdb, today, tomorrow)
 	if err != nil {
 		return models.ReportSummary{}, err
 	}
-	monthSales, err := netSales(ctx, mdb, monthStart(now, tz), tomorrow)
+	monthSales, err := netSales(ctx, mdb, calendar.MonthStart(now, tz), tomorrow)
 	if err != nil {
 		return models.ReportSummary{}, err
 	}

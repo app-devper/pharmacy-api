@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"time"
+
+	"pharmacy-pos/backend/calendar"
 )
 
 func jsonOK(w http.ResponseWriter, data interface{}) {
@@ -22,5 +24,5 @@ func jsonError(w http.ResponseWriter, msg string, code int) {
 // Times come back from MongoDB in UTC, so formatting them directly shifts any
 // time before 07:00 in Bangkok to the previous day.
 func localDate(t time.Time, tz *time.Location) string {
-	return t.In(tz).Format("2006-01-02")
+	return calendar.Day(t, tz)
 }

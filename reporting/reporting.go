@@ -22,26 +22,12 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	"pharmacy-pos/backend/calendar"
 	"pharmacy-pos/backend/db"
 	"pharmacy-pos/backend/models"
 )
 
-const (
-	dayLayout   = "2006-01-02"
-	monthLayout = "2006-01"
-)
-
-// DayStart is midnight of t's calendar day in tz.
-func DayStart(t time.Time, tz *time.Location) time.Time {
-	t = t.In(tz)
-	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, tz)
-}
-
-// monthStart is midnight of the first day of t's month in tz.
-func monthStart(t time.Time, tz *time.Location) time.Time {
-	t = t.In(tz)
-	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, tz)
-}
+const monthLayout = "2006-01"
 
 func period(field string, from, to time.Time) bson.M {
 	f := bson.M{}
@@ -131,7 +117,7 @@ func aggregate(ctx context.Context, c *mongo.Collection, pipeline bson.A) ([]lin
 func daily(lines []line, tz *time.Location) []models.DailyData {
 	totals := map[string]float64{}
 	for _, l := range lines {
-		totals[l.At.In(tz).Format(dayLayout)] += l.Revenue
+		totals[l.At.In(tz).Format(calendar.DayLayout)] += l.Revenue
 	}
 	keys := sortedKeys(totals)
 	out := make([]models.DailyData, 0, len(keys))
@@ -235,7 +221,7 @@ func sum(ctx context.Context, c *mongo.Collection, match bson.M, field string) (
 // Day is a business day's End-of-day report computed from its confirmed
 // bills and the refunds of returns made that day.
 func Day(ctx context.Context, mdb *db.MongoDB, day time.Time, tz *time.Location) (models.EodReport, error) {
-	start := DayStart(day, tz)
+	start := calendar.DayStart(day, tz)
 	end := start.AddDate(0, 0, 1)
 	cur, err := mdb.Sales().Find(ctx, confirmedSales(start, end), options.Find().SetSort(bson.D{{Key: "sold_at", Value: 1}}))
 	if err != nil {
@@ -257,7 +243,7 @@ func Day(ctx context.Context, mdb *db.MongoDB, day time.Time, tz *time.Location)
 		change += b.Change
 	}
 	return models.EodReport{
-		Date:          start.Format(dayLayout),
+		Date:          start.Format(calendar.DayLayout),
 		BillCount:     len(bills),
 		TotalSales:    sales - refunds,
 		TotalDiscount: discount,
