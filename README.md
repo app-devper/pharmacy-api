@@ -264,6 +264,8 @@ MONGO_URI=mongodb://127.0.0.1:27017 REDIS_ADDR=127.0.0.1:6379 \
 | `GET` | `/api/pharmacy/v1/sales/:id/ky` | ดึง KY entries (ขย.10/11/12) ทั้งหมดที่ผูกกับใบขาย — แยกตาม `ky10` / `ky11` / `ky12` |
 | `GET` | `/api/pharmacy/v1/export/:form` | Export PDF (ky9, ky10, ky11, ky12) |
 
+**กฎของแต่ละ register (module `compliance`)** — แถวที่บันทึกเอง (`POST /kyN`), แถวที่บันทึกพร้อมบิลขาย (ขย.10–12) และ ขย.9 จากการรับสินค้า ใช้กฎชุดเดียวกัน: `date` ต้องเป็นวันที่จริงรูปแบบ `YYYY-MM-DD`, `drug_name` ห้ามว่าง, `qty > 0` และช่องผู้ซื้อ/ใบสั่งยาที่แต่ละฟอร์มบังคับ ช่องที่เว้นว่างได้รับค่า default ของร้านเหมือนกันทุกทาง (ขย.10 `buyer_address` ← `settings.ky.default_buyer_address`, ขย.11 `pharmacist` ← `settings.pharmacist.name`, ขย.12 `status` ← `จ่ายแล้ว`) ข้อความ error ขึ้นต้นด้วยชื่อฟอร์ม เช่น `ขย.10: buyer_name is required` (400) และ `?month=` ของ list/export ต้องเป็น `YYYY-MM` ไม่เช่นนั้นตอบ 400
+
 **Sale linkage (`sale_id`)** — ทุก KY entity (ขย.9/10/11/12) มี optional field `sale_id` (string, `omitempty`). เมื่อ KY ถูกบันทึกพร้อมการขาย (ขย.10/11/12) frontend ส่ง `sale_id` ของ Sale ที่เพิ่ง create เพื่อให้สามารถ trace ย้อนกลับได้ผ่าน `GET /sales/:id/ky`. Backend trim whitespace + เก็บเป็น `""` (omit จาก response) สำหรับ entry ที่ไม่ได้ผูกกับ sale. มี partial index บน `ky10/ky11/ky12.sale_id` (filter `$type:"string"` + `$gt:""`) — ไม่ index ค่าว่าง.
 
 ### Labels

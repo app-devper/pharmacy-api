@@ -1,7 +1,6 @@
 package models
 
 import (
-	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -21,24 +20,6 @@ type Ky9 struct {
 	Seller       string        `bson:"seller"            json:"seller"`
 	InvoiceNo    string        `bson:"invoice_no"        json:"invoice_no"`
 	CreatedAt    time.Time     `bson:"created_at"        json:"created_at"`
-}
-
-// Record is the ขย.9 row for this input. Confirming a goods receipt and a
-// manual entry both build the row here.
-func (in Ky9Input) Record(now time.Time) Ky9 {
-	return Ky9{
-		SaleID:       strings.TrimSpace(in.SaleID),
-		Date:         in.Date,
-		DrugName:     in.DrugName,
-		RegNo:        in.RegNo,
-		Unit:         in.Unit,
-		Qty:          in.Qty,
-		PricePerUnit: in.PricePerUnit,
-		TotalValue:   in.PricePerUnit * float64(in.Qty),
-		Seller:       in.Seller,
-		InvoiceNo:    in.InvoiceNo,
-		CreatedAt:    now,
-	}
 }
 
 type Ky9Input struct {
