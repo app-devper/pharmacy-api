@@ -267,37 +267,3 @@ func Day(ctx context.Context, mdb *db.MongoDB, day time.Time, tz *time.Location)
 		Bills:         bills,
 	}, nil
 }
-
-// Stock summarises stock for the dashboard. A drug at or below zero is out
-// of stock (oversold drugs go negative); stock value counts only units on
-// hand.
-func Stock(ctx context.Context, mdb *db.MongoDB, lowThreshold int) (value float64, low, out int, err error) {
-	cur, err := mdb.Drugs().Aggregate(ctx, bson.A{
-		bson.M{"$group": bson.M{"_id": nil, "total": bson.M{"$sum": bson.M{"$multiply": bson.A{
-			"$cost_price", bson.M{"$max": bson.A{"$stock", 0}},
-		}}}}},
-	})
-	if err != nil {
-		return
-	}
-	var res []struct {
-		Total float64 `bson:"total"`
-	}
-	if err = cur.All(ctx, &res); err != nil {
-		return
-	}
-	if len(res) > 0 {
-		value = res[0].Total
-	}
-	lowN, err := mdb.Drugs().CountDocuments(ctx, bson.M{"$expr": bson.M{"$and": bson.A{
-		bson.M{"$gt": bson.A{"$stock", 0}},
-		bson.M{"$lte": bson.A{"$stock", bson.M{"$cond": bson.A{
-			bson.M{"$gt": bson.A{"$min_stock", 0}}, "$min_stock", lowThreshold,
-		}}}},
-	}}})
-	if err != nil {
-		return
-	}
-	outN, err := mdb.Drugs().CountDocuments(ctx, bson.M{"stock": bson.M{"$lte": 0}})
-	return value, int(lowN), int(outN), err
-}

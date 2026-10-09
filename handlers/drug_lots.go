@@ -10,7 +10,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"go.mongodb.org/mongo-driver/v2/bson"
-	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
 	"pharmacy-pos/backend/inventory"
@@ -22,7 +21,7 @@ type DrugLotHandler struct{ dbm *db.Manager }
 
 func NewDrugLotHandler(d *db.Manager) *DrugLotHandler { return &DrugLotHandler{dbm: d} }
 
-// ListLots returns all lots for a drug, sorted by expiry_date ASC (FEFO order).
+// ListLots returns all lots for a drug in the order sales take from them.
 func (h *DrugLotHandler) ListLots(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	drugOID, err := bson.ObjectIDFromHex(id)
@@ -39,23 +38,10 @@ func (h *DrugLotHandler) ListLots(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	cur, err := mdb.DrugLots().Find(ctx,
-		bson.M{"drug_id": drugOID},
-		options.Find().SetSort(bson.D{{Key: "expiry_date", Value: 1}}),
-	)
+	lots, err := inventory.Lots(ctx, mdb, drugOID)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
-	}
-	defer cur.Close(ctx)
-
-	var lots []models.DrugLot
-	if err := cur.All(ctx, &lots); err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if lots == nil {
-		lots = []models.DrugLot{}
 	}
 	jsonOK(w, lots)
 }
@@ -83,7 +69,7 @@ func (h *DrugLotHandler) AddLot(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, lot)
 }
 
-// Expiring returns lots that still have remaining stock, filtered by expiry window.
+// Expiring returns sellable lots in an expiry window (written-off lots are already dealt with).
 // GET /api/pharmacy/v1/lots/expiring?days=60         — lots expiring within N days (default from Settings, includes already-expired)
 // GET /api/pharmacy/v1/lots/expiring?expired_only=true — only lots whose expiry_date is already in the past
 func (h *DrugLotHandler) Expiring(w http.ResponseWriter, r *http.Request) {
@@ -103,59 +89,12 @@ func (h *DrugLotHandler) Expiring(w http.ResponseWriter, r *http.Request) {
 		days = d
 	}
 
-	now := time.Now()
-
-	var filter bson.M
-	if expiredOnly {
-		filter = bson.M{
-			"expiry_date": bson.M{"$lt": now},
-			"remaining":   bson.M{"$gt": 0},
-			"no_expiry":   bson.M{"$ne": true},
-		}
-	} else {
-		threshold := now.AddDate(0, 0, days)
-		filter = bson.M{
-			"expiry_date": bson.M{"$lte": threshold},
-			"remaining":   bson.M{"$gt": 0},
-			"no_expiry":   bson.M{"$ne": true},
-		}
-	}
-
-	cur, err := mdb.DrugLots().Find(ctx,
-		filter,
-		options.Find().SetSort(bson.D{{Key: "expiry_date", Value: 1}}),
-	)
+	lots, err := inventory.Expiring(ctx, mdb, time.Now(), days, expiredOnly)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer cur.Close(ctx)
-
-	var lots []models.DrugLot
-	if err := cur.All(ctx, &lots); err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	if len(lots) == 0 {
-		jsonOK(w, []models.ExpiringLotItem{})
-		return
-	}
-
-	result := make([]models.ExpiringLotItem, 0, len(lots))
-	for _, l := range lots {
-		daysLeft := int(l.ExpiryDate.Sub(now).Hours() / 24)
-		result = append(result, models.ExpiringLotItem{
-			ID:         l.ID,
-			DrugID:     l.DrugID,
-			DrugName:   l.DrugName,
-			LotNumber:  l.LotNumber,
-			ExpiryDate: l.ExpiryDate,
-			Remaining:  l.Remaining,
-			DaysLeft:   daysLeft,
-		})
-	}
-	jsonOK(w, result)
+	jsonOK(w, lots)
 }
 
 // WriteoffLots writes off every listed lot or none (inventory, ADR-0007).
