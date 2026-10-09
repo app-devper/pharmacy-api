@@ -247,7 +247,7 @@ MONGO_URI=mongodb://127.0.0.1:27017 REDIS_ADDR=127.0.0.1:6379 \
 | `GET` | `/api/pharmacy/v1/report/daily` | ยอดขายรายวัน (default 7 วัน) |
 | `GET` | `/api/pharmacy/v1/report/monthly` | สรุปรายเดือน (default 12 เดือน) |
 | `GET` | `/api/pharmacy/v1/report/top-drugs` | ยาขายดี |
-| `GET` | `/api/pharmacy/v1/report/slow-drugs` | ยาขายช้า |
+| `GET` | `/api/pharmacy/v1/report/slow-drugs` | ยาขายช้า: ยามีสต็อกที่ไม่มีบิลขายใน `days` วันเต็มตามปฏิทินร้าน (default 90) |
 | `GET` | `/api/pharmacy/v1/report/eod` | สรุปปิดยอดประจำวัน |
 | `GET` | `/api/pharmacy/v1/report/profit` | รายงานกำไร |
 
