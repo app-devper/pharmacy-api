@@ -21,3 +21,5 @@ Sensitive reads include customer-identifying data, sale history and bill items, 
 Inventory: every stock change runs in the [inventory module](../inventory/) (ADR-0007); `GET /inventory/drift` lists lot-tracked drugs whose stock and lots disagree.
 
 Reporting: every report and the End-of-day close use the [reporting module](../reporting/) (ADR-0008): pharmacy timezone, end-exclusive periods, amounts as paid after the bill discount.
+
+Compliance: the [compliance module](../compliance/) owns the KY registers (ขย.9–12): one rule per register for a valid row and the shop's defaults, recording a row inside the caller's transaction (a sale's capture, a confirmed goods receipt, or a manual entry), and reading a register by month or by sale. Sales still decides which lines need which form (ADR-0011).
