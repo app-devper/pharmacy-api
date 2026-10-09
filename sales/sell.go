@@ -93,7 +93,7 @@ func sell(ctx context.Context, mdb *db.MongoDB, input models.SaleInput, fp strin
 			return err
 		}
 		now := time.Now().In(tz)
-		generatedBillNo, err := nextSaleBillNo(txCtx, mdb, now)
+		generatedBillNo, err := mdb.NextDocNo(txCtx, "INV", now)
 		if err != nil {
 			return err
 		}

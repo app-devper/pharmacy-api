@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"math"
 	"strings"
-	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
-	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
 	"pharmacy-pos/backend/inventory"
@@ -164,23 +162,6 @@ func resolveSaleCustomer(ctx context.Context, mdb *db.MongoDB, customerID *strin
 		return nil, "", err
 	}
 	return &oid, customer.Name, nil
-}
-
-func nextSaleBillNo(ctx context.Context, mdb *db.MongoDB, now time.Time) (string, error) {
-	today := now.Format("060102")
-	counterID := "INV-" + today
-	var counter struct {
-		Seq int `bson:"seq"`
-	}
-	err := mdb.Counters().FindOneAndUpdate(ctx,
-		bson.M{"_id": counterID},
-		bson.M{"$inc": bson.M{"seq": 1}},
-		options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.After),
-	).Decode(&counter)
-	if err != nil {
-		return "", fmt.Errorf("bill number error: %w", err)
-	}
-	return fmt.Sprintf("INV-%s-%03d", today, counter.Seq), nil
 }
 
 func applySaleItem(ctx context.Context, mdb *db.MongoDB, saleID bson.ObjectID, item preparedSaleItem) error {

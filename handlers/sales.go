@@ -14,6 +14,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	"pharmacy-pos/backend/calendar"
 	"pharmacy-pos/backend/db"
 	mw "pharmacy-pos/backend/middleware"
 	"pharmacy-pos/backend/models"
@@ -44,20 +45,14 @@ func (h *SaleHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	filter := bson.M{}
 
-	// Date range filter
-	fromStr := q.Get("from")
-	toStr := q.Get("to")
-	if fromStr != "" || toStr != "" {
+	// Date range filter: inclusive dates in the pharmacy's calendar.
+	if from, to := calendar.Dates(tz, q.Get("from"), q.Get("to")); !from.IsZero() || !to.IsZero() {
 		dateFilter := bson.M{}
-		if fromStr != "" {
-			if t, err := time.ParseInLocation("2006-01-02", fromStr, tz); err == nil {
-				dateFilter["$gte"] = t
-			}
+		if !from.IsZero() {
+			dateFilter["$gte"] = from
 		}
-		if toStr != "" {
-			if t, err := time.ParseInLocation("2006-01-02", toStr, tz); err == nil {
-				dateFilter["$lt"] = t.Add(24 * time.Hour)
-			}
+		if !to.IsZero() {
+			dateFilter["$lt"] = to
 		}
 		filter["sold_at"] = dateFilter
 	}
