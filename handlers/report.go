@@ -16,6 +16,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
+	"pharmacy-pos/backend/inventory"
 	mw "pharmacy-pos/backend/middleware"
 	"pharmacy-pos/backend/models"
 	"pharmacy-pos/backend/reporting"
@@ -61,13 +62,13 @@ func summaryNow(ctx context.Context, mdb *db.MongoDB) (models.ReportSummary, err
 	if err != nil {
 		return models.ReportSummary{}, err
 	}
-	value, low, out, err := reporting.Stock(ctx, mdb, loadStockSettings(ctx, mdb).LowStockThreshold)
+	stock, err := inventory.Summarise(ctx, mdb, loadStockSettings(ctx, mdb).LowStockThreshold)
 	if err != nil {
 		return models.ReportSummary{}, err
 	}
 	return models.ReportSummary{
 		TodaySales: todaySales, TodayBills: todayBills, MonthSales: monthSales,
-		StockValue: value, LowStock: low, OutStock: out,
+		StockValue: stock.Value, LowStock: stock.Low, OutStock: stock.Out,
 	}, nil
 }
 

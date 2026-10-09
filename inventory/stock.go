@@ -26,9 +26,17 @@ import (
 	"pharmacy-pos/backend/refusal"
 )
 
-// sellable is the filter for lots a sale may take from, first expiry first.
+// sellableLots is the filter for lots a sale may take from, of any drug.
+func sellableLots() bson.M {
+	return bson.M{"remaining": bson.M{"$gt": 0}, "written_off_at": bson.M{"$exists": false}}
+}
+
+// sellable is the filter for the drug's lots a sale may take from, first
+// expiry first.
 func sellable(drugID bson.ObjectID) bson.M {
-	return bson.M{"drug_id": drugID, "remaining": bson.M{"$gt": 0}, "written_off_at": bson.M{"$exists": false}}
+	f := sellableLots()
+	f["drug_id"] = drugID
+	return f
 }
 
 var byExpiry = options.Find().SetSort(bson.D{{Key: "expiry_date", Value: 1}, {Key: "_id", Value: 1}})

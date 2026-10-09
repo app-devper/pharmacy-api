@@ -187,8 +187,8 @@ MONGO_URI=mongodb://127.0.0.1:27017 REDIS_ADDR=127.0.0.1:6379 \
 | `GET` | `/api/pharmacy/v1/drugs/:id/lots` | รายการล็อต (เรียง expiry ASC) |
 | `POST` | `/api/pharmacy/v1/drugs/:id/lots` | เพิ่มล็อต → `$inc stock` |
 | `DELETE` | `/api/pharmacy/v1/drugs/:id/lots/:lot_id` | ลบล็อต → `$dec stock` ตาม remaining |
-| `GET` | `/api/pharmacy/v1/lots/expiring?days=N` | ล็อตที่หมดอายุหรือจะหมดใน N วัน (default 60) |
-| `GET` | `/api/pharmacy/v1/lots/expiring?expired_only=true` | เฉพาะล็อตที่ผ่านวันหมดอายุแล้ว (remaining > 0) |
+| `GET` | `/api/pharmacy/v1/lots/expiring?days=N` | ล็อตที่ขายได้ซึ่งหมดอายุหรือจะหมดใน N วัน (default 60; ไม่รวมล็อตที่ตัดจำหน่ายแล้ว) |
+| `GET` | `/api/pharmacy/v1/lots/expiring?expired_only=true` | เฉพาะล็อตที่ผ่านวันหมดอายุแล้ว (remaining > 0, ยังไม่ตัดจำหน่าย) |
 | `POST` | `/api/pharmacy/v1/lots/writeoff` | ตัดจำหน่าย bulk ล็อตหมดอายุ → `$dec stock` ต่อล็อต |
 
 ### Sales
@@ -392,8 +392,9 @@ type Drug struct {
     ReportTypes []string       // ["ky9", "ky10", "ky11", "ky12"]
     AltUnits    []AltUnit      // หน่วยทางเลือก (แผง, กล่อง, …) — ดูด้านล่าง
     Prices      PriceTiers     // map[tier]price (retail/regular/wholesale/custom)
-    // Computed on list responses only (not persisted): earliest-expiring lot
-    // with remaining > 0. Frontends use this to surface "next expiry" + to
+    // Computed on list responses only (not persisted): the lot the next sale
+    // takes from (first sellable lot by expiry; never a written-off lot).
+    // Frontends use this to surface "next expiry" + to
     // snapshot expected lot at checkout time for offline-queued sales.
     NextLot     *LotSummary    // {lot_id, lot_number, expiry_date} | nil
     CreatedAt   time.Time      // วันที่สร้าง

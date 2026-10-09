@@ -172,17 +172,3 @@ func TestDaysFollowThePharmacyTimezone(t *testing.T) {
 		t.Fatalf("daily %+v, want one row for %s", daily, day.Format("2006-01-02"))
 	}
 }
-
-func TestOversoldDrugsCountAsOutOfStock(t *testing.T) {
-	s := newShop(t)
-	if _, err := s.mdb.Drugs().InsertOne(s.ctx, models.Drug{Name: "Oversold", CostPrice: 7, Stock: -3}); err != nil {
-		t.Fatal(err)
-	}
-	value, _, out, err := reporting.Stock(s.ctx, s.mdb, 5)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out != 1 || !near(value, 400) {
-		t.Fatalf("out %d value %.2f, want 1 and 400 (negative stock adds nothing)", out, value)
-	}
-}

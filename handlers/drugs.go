@@ -241,50 +241,20 @@ func (h *DrugHandler) List(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, drugs)
 }
 
-// attachNextLots decorates `drugs` in place with NextLot — the earliest-
-// expiring lot with remaining > 0 for each drug. Errors are swallowed
-// (falls back to no decoration) because a missing lot summary should never
-// block the drug list from returning. One aggregation on drug_lots, O(N)
-// in lots — not per-drug lookups.
+// attachNextLots decorates drugs in place with NextLot, the lot the next
+// sale takes from (inventory decides). Errors are swallowed: a missing lot
+// summary should never block the drug list from returning.
 func attachNextLots(ctx context.Context, mdb *db.MongoDB, drugs []models.Drug) {
 	if len(drugs) == 0 {
 		return
 	}
-	pipe := bson.A{
-		bson.M{"$match": bson.M{"remaining": bson.M{"$gt": 0}}},
-		bson.M{"$sort": bson.D{{Key: "drug_id", Value: 1}, {Key: "expiry_date", Value: 1}}},
-		bson.M{"$group": bson.M{
-			"_id":         "$drug_id",
-			"lot_id":      bson.M{"$first": "$_id"},
-			"lot_number":  bson.M{"$first": "$lot_number"},
-			"expiry_date": bson.M{"$first": "$expiry_date"},
-		}},
-	}
-	cur, err := mdb.DrugLots().Aggregate(ctx, pipe)
+	next, err := inventory.NextLots(ctx, mdb)
 	if err != nil {
 		return
 	}
-	defer cur.Close(ctx)
-	var rows []struct {
-		DrugID     bson.ObjectID `bson:"_id"`
-		LotID      bson.ObjectID `bson:"lot_id"`
-		LotNumber  string        `bson:"lot_number"`
-		ExpiryDate time.Time     `bson:"expiry_date"`
-	}
-	if err := cur.All(ctx, &rows); err != nil {
-		return
-	}
-	byDrug := make(map[bson.ObjectID]*models.LotSummary, len(rows))
-	for _, r := range rows {
-		byDrug[r.DrugID] = &models.LotSummary{
-			LotID:      r.LotID,
-			LotNumber:  r.LotNumber,
-			ExpiryDate: r.ExpiryDate,
-		}
-	}
 	for i := range drugs {
-		if lot, ok := byDrug[drugs[i].ID]; ok {
-			drugs[i].NextLot = lot
+		if lot, ok := next[drugs[i].ID]; ok {
+			drugs[i].NextLot = &lot
 		}
 	}
 }
@@ -547,34 +517,12 @@ func (h *DrugHandler) LowStock(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	// Match report.go Summary semantics: low-stock = nearly out (stock > 0 and <= threshold).
-	// Threshold = min_stock if > 0, else the tenant-configurable default (Settings.stock.low_stock_threshold).
-	// Drugs with stock == 0 are surfaced separately as "out of stock".
-	threshold := loadStockSettings(ctx, mdb).LowStockThreshold
-	cur, err := mdb.Drugs().Find(ctx,
-		bson.M{"$expr": bson.M{
-			"$and": bson.A{
-				bson.M{"$gt": bson.A{"$stock", 0}},
-				bson.M{"$lte": bson.A{"$stock", bson.M{"$cond": bson.A{
-					bson.M{"$gt": bson.A{"$min_stock", 0}}, "$min_stock", threshold,
-				}}}},
-			},
-		}},
-		options.Find().SetSort(bson.D{{Key: "stock", Value: 1}}),
-	)
+	// Low stock = nearly out (stock > 0 and <= min_stock, or the tenant's
+	// default threshold); stock <= 0 is out of stock. inventory owns the rule.
+	drugs, err := inventory.LowStock(ctx, mdb, loadStockSettings(ctx, mdb).LowStockThreshold)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
-	}
-	defer cur.Close(ctx)
-
-	var drugs []models.Drug
-	if err := cur.All(ctx, &drugs); err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if drugs == nil {
-		drugs = []models.Drug{}
 	}
 	jsonOK(w, drugs)
 }
