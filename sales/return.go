@@ -9,7 +9,6 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
-	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
 	"pharmacy-pos/backend/inventory"
@@ -124,21 +123,11 @@ func recordReturn(ctx context.Context, mdb *db.MongoDB, oid bson.ObjectID, input
 		}
 
 		now := time.Now()
-		// Counter keyed by local calendar day so same-day returns share one seq
-		// and the RET-YYMMDD prefix matches the pharmacy's local date.
-		today := now.In(tz).Format("060102")
-		counterID := "RET-" + today
-		var counter struct {
-			Seq int `bson:"seq"`
+		// Numbered by the pharmacy's business day, like bills.
+		returnNo, err := mdb.NextDocNo(txCtx, "RET", now.In(tz))
+		if err != nil {
+			return err
 		}
-		if err := mdb.Counters().FindOneAndUpdate(txCtx,
-			bson.M{"_id": counterID},
-			bson.M{"$inc": bson.M{"seq": 1}},
-			options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.After),
-		).Decode(&counter); err != nil {
-			return fmt.Errorf("return number error: %w", err)
-		}
-		returnNo := fmt.Sprintf("RET-%s-%03d", today, counter.Seq)
 
 		returnItems := make([]models.ReturnItem, 0, len(input.Items))
 		refund := 0.0

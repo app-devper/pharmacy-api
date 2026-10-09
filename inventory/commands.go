@@ -3,7 +3,6 @@ package inventory
 import (
 	"context"
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -283,7 +282,7 @@ func Count(ctx context.Context, mdb *db.MongoDB, in models.StockCountInput) (mod
 	var count models.StockCount
 	err := mdb.WithTransaction(ctx, func(txCtx context.Context) error {
 		now := time.Now().In(tz)
-		countNo, err := nextStockCountNo(txCtx, mdb, now)
+		countNo, err := mdb.NextDocNo(txCtx, "SC", now)
 		if err != nil {
 			return err
 		}
@@ -315,22 +314,6 @@ func Count(ctx context.Context, mdb *db.MongoDB, in models.StockCountInput) (mod
 		return nil
 	})
 	return count, err
-}
-
-func nextStockCountNo(txCtx context.Context, mdb *db.MongoDB, now time.Time) (string, error) {
-	today := now.Format("060102")
-	var counter struct {
-		Seq int `bson:"seq"`
-	}
-	err := mdb.Counters().FindOneAndUpdate(txCtx,
-		bson.M{"_id": "SC-" + today},
-		bson.M{"$inc": bson.M{"seq": 1}},
-		options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.After),
-	).Decode(&counter)
-	if err != nil {
-		return "", fmt.Errorf("stock count number error: %w", err)
-	}
-	return fmt.Sprintf("SC-%s-%03d", today, counter.Seq), nil
 }
 
 // WriteOffError names the lot that stopped a write-off.

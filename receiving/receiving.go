@@ -15,7 +15,6 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
-	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
 	"pharmacy-pos/backend/inventory"
@@ -42,7 +41,7 @@ func Draft(ctx context.Context, mdb *db.MongoDB, in models.POInput) (models.Purc
 	if err != nil {
 		return models.PurchaseOrder{}, err
 	}
-	docNo, err := nextDocNo(ctx, mdb, now.In(tz))
+	docNo, err := mdb.NextDocNo(ctx, "IMP", now.In(tz))
 	if err != nil {
 		return models.PurchaseOrder{}, err
 	}
@@ -260,20 +259,4 @@ func lines(ctx context.Context, mdb *db.MongoDB, inputs []models.POItemInput, tz
 		total += float64(in.Qty) * in.CostPrice
 	}
 	return items, total, nil
-}
-
-func nextDocNo(ctx context.Context, mdb *db.MongoDB, localNow time.Time) (string, error) {
-	day := localNow.Format("060102")
-	var counter struct {
-		Seq int `bson:"seq"`
-	}
-	err := mdb.Counters().FindOneAndUpdate(ctx,
-		bson.M{"_id": "IMP-" + day},
-		bson.M{"$inc": bson.M{"seq": 1}},
-		options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.After),
-	).Decode(&counter)
-	if err != nil {
-		return "", fmt.Errorf("doc_no generation failed: %w", err)
-	}
-	return fmt.Sprintf("IMP-%s-%03d", day, counter.Seq), nil
 }

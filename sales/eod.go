@@ -10,6 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	"pharmacy-pos/backend/calendar"
 	"pharmacy-pos/backend/db"
 	"pharmacy-pos/backend/models"
 	"pharmacy-pos/backend/reporting"
@@ -21,9 +22,9 @@ import (
 // live report uses, so a closed day's snapshot plus its adjustments always
 // equals what the live report would now show.
 
-const dayLayout = "2006-01-02"
+const dayLayout = calendar.DayLayout
 
-func businessDay(t time.Time, tz *time.Location) string { return t.In(tz).Format(dayLayout) }
+func businessDay(t time.Time, tz *time.Location) string { return calendar.Day(t, tz) }
 
 // actor is the verified user behind the request, for audit fields.
 func actor(ctx context.Context) string {

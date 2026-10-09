@@ -12,6 +12,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	"pharmacy-pos/backend/calendar"
 	"pharmacy-pos/backend/db"
 	"pharmacy-pos/backend/models"
 	"pharmacy-pos/backend/reporting"
@@ -190,7 +191,7 @@ func TestReturningADiscountedBillRefundsWhatWasPaid(t *testing.T) {
 // previous UTC day.
 func TestDaysFollowThePharmacyTimezone(t *testing.T) {
 	s := newShop(t)
-	day := reporting.DayStart(time.Now(), s.tz).AddDate(0, 0, -1)
+	day := calendar.DayStart(time.Now(), s.tz).AddDate(0, 0, -1)
 	s.soldAt(day.Add(30*time.Minute), s.drugID, 5, 50, 20)
 	daily, err := reporting.Daily(s.ctx, s.mdb, time.Now(), 1)
 	if err != nil {
@@ -205,10 +206,10 @@ func TestDaysFollowThePharmacyTimezone(t *testing.T) {
 // the window means the drug sold, whatever the time of day the report runs.
 func TestSlowDrugsCountsWholePharmacyDays(t *testing.T) {
 	s := newShop(t)
-	now := reporting.DayStart(time.Now(), s.tz).Add(23 * time.Hour)
+	now := calendar.DayStart(time.Now(), s.tz).Add(23 * time.Hour)
 	sold := s.drug("Sold early on day one", 5)
 	idle := s.drug("Never sold", 5)
-	s.soldAt(reporting.DayStart(now, s.tz).AddDate(0, 0, -7).Add(30*time.Minute), sold, 1, 10, 4)
+	s.soldAt(calendar.DayStart(now, s.tz).AddDate(0, 0, -7).Add(30*time.Minute), sold, 1, 10, 4)
 
 	slow, err := reporting.SlowDrugs(s.ctx, s.mdb, now, 7)
 	if err != nil {
@@ -255,7 +256,7 @@ func TestTopDrugsRankByNetQuantityAndSkipFullyReturned(t *testing.T) {
 func TestProfitTotalsMarginsAndBillsOverTheDates(t *testing.T) {
 	s := newShop(t)
 	now := time.Now()
-	today := reporting.DayStart(now, s.tz)
+	today := calendar.DayStart(now, s.tz)
 	s.soldAt(today.Add(time.Hour), s.drugID, 2, 20, 8)
 	s.soldAt(today.AddDate(0, 0, -40), s.drugID, 9, 90, 36) // outside
 	date := today.Format("2006-01-02")
