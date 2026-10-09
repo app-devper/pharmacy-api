@@ -5,10 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"net/http"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -527,16 +524,11 @@ func (h *DrugHandler) LowStock(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, drugs)
 }
 
-// ReorderSuggestions — sales-driven reorder advice.
+// ReorderSuggestions — sales-driven reorder advice (reporting.Reorder).
 //
-// Only drugs with recorded sales in the lookback window are considered (slow/dead
-// stock is ignored regardless of min_stock). For each active drug we compute the
-// projected demand over `lookahead` days from the average daily sale rate, then
-// suggest enough to cover that demand minus what's already on hand.
-//
-// Query params:
-//   - days       (default 30)   lookback window for averaging sales
-//   - lookahead  (default 14)   target cover days; suggest = ceil(avg_daily × lookahead) − stock
+// Query params (defaults from tenant settings):
+//   - days       lookback window for averaging sales (max 365)
+//   - lookahead  target cover days (max 180)
 //
 // GET /api/pharmacy/v1/drugs/reorder-suggestions
 func (h *DrugHandler) ReorderSuggestions(w http.ResponseWriter, r *http.Request) {
@@ -548,93 +540,13 @@ func (h *DrugHandler) ReorderSuggestions(w http.ResponseWriter, r *http.Request)
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
-	// Defaults come from tenant settings; query params still override per-request.
 	stockCfg := loadStockSettings(ctx, mdb)
-	days := stockCfg.ReorderDays
-	if v, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil && v > 0 && v <= 365 {
-		days = v
-	}
-	lookahead := stockCfg.ReorderLookahead
-	if v, err := strconv.Atoi(r.URL.Query().Get("lookahead")); err == nil && v > 0 && v <= 180 {
-		lookahead = v
-	}
-
-	lines, err := reporting.Lines(ctx, mdb, reporting.DayStart(time.Now(), mdb.Timezone(ctx)).AddDate(0, 0, -days), time.Time{})
+	days := intParam(r, "days", stockCfg.ReorderDays, 365)
+	lookahead := intParam(r, "lookahead", stockCfg.ReorderLookahead, 180)
+	out, err := reporting.Reorder(ctx, mdb, time.Now(), days, lookahead)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	totals := reporting.ByDrug(lines)
-	if len(totals) == 0 {
-		jsonOK(w, []models.ReorderSuggestion{})
-		return
-	}
-
-	// Batch-fetch only the drugs that actually had sales
-	ids := make([]bson.ObjectID, 0, len(totals))
-	for id, t := range totals {
-		if t != nil && t.Qty > 0 {
-			ids = append(ids, id)
-		}
-	}
-	if len(ids) == 0 {
-		jsonOK(w, []models.ReorderSuggestion{})
-		return
-	}
-
-	cur, err := mdb.Drugs().Find(ctx, bson.M{"_id": bson.M{"$in": ids}})
-	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer cur.Close(ctx)
-	var drugs []models.Drug
-	if err := cur.All(ctx, &drugs); err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	out := make([]models.ReorderSuggestion, 0, len(drugs))
-	for _, d := range drugs {
-		t := totals[d.ID]
-		if t == nil || t.Qty <= 0 {
-			continue // sales-driven: skip anything that never sold
-		}
-		qtySold := t.Qty
-		avgDaily := float64(qtySold) / float64(days)
-
-		projectedNeed := int(math.Ceil(avgDaily * float64(lookahead)))
-		if d.Stock >= projectedNeed {
-			continue // stock already covers the next `lookahead` days
-		}
-
-		daysLeft := 0.0
-		if avgDaily > 0 {
-			daysLeft = float64(d.Stock) / avgDaily
-		}
-
-		out = append(out, models.ReorderSuggestion{
-			DrugID:       d.ID.Hex(),
-			DrugName:     d.Name,
-			Unit:         d.Unit,
-			CurrentStock: d.Stock,
-			MinStock:     d.MinStock,
-			QtySold:      qtySold,
-			AvgDailySale: avgDaily,
-			DaysLeft:     daysLeft,
-			SuggestedQty: projectedNeed - d.Stock,
-			CostPrice:    d.CostPrice,
-			SellPrice:    d.SellPrice,
-		})
-	}
-
-	// Sort: out-of-stock first, then smallest days_left (most urgent first)
-	sort.SliceStable(out, func(i, j int) bool {
-		if (out[i].CurrentStock == 0) != (out[j].CurrentStock == 0) {
-			return out[i].CurrentStock == 0
-		}
-		return out[i].DaysLeft < out[j].DaysLeft
-	})
-
 	jsonOK(w, out)
 }
