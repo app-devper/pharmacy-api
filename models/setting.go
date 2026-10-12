@@ -115,3 +115,44 @@ type SettingsInput struct {
 	KY         KYSettings      `json:"ky"`
 	Timezone   string          `json:"timezone"`
 }
+
+// Effective is the settings as the shop runs on them: a zero reorder window,
+// lookahead or expiry window means the built-in default (there is no rate
+// over zero days). A zero low-stock threshold is kept: it means "never flag
+// low stock". A blank or unknown timezone means DefaultTimezone (see
+// Location).
+func (s Settings) Effective() Settings {
+	if s.Stock.ReorderDays <= 0 {
+		s.Stock.ReorderDays = DefaultReorderDays
+	}
+	if s.Stock.ReorderLookahead <= 0 {
+		s.Stock.ReorderLookahead = DefaultReorderLookahead
+	}
+	if s.Stock.ExpiringDays <= 0 {
+		s.Stock.ExpiringDays = DefaultExpiringDays
+	}
+	if _, err := time.LoadLocation(s.Timezone); s.Timezone == "" || err != nil {
+		s.Timezone = DefaultTimezone
+	}
+	return s
+}
+
+// defaultLocation is DefaultTimezone, or a fixed +07:00 when the host has no
+// zone database.
+var defaultLocation = func() *time.Location {
+	if loc, err := time.LoadLocation(DefaultTimezone); err == nil {
+		return loc
+	}
+	return time.FixedZone(DefaultTimezone, 7*60*60)
+}()
+
+// Location is the shop's timezone: where its days and months begin.
+func (s Settings) Location() *time.Location {
+	if s.Timezone == "" {
+		return defaultLocation
+	}
+	if loc, err := time.LoadLocation(s.Timezone); err == nil {
+		return loc
+	}
+	return defaultLocation
+}

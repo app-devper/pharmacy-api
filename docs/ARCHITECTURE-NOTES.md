@@ -23,3 +23,5 @@ Inventory: every stock change runs in the [inventory module](../inventory/) (ADR
 Reporting: every report and the End-of-day close use the [reporting module](../reporting/) (ADR-0008): pharmacy timezone, end-exclusive periods, amounts as paid after the bill discount.
 
 Compliance: the [compliance module](../compliance/) owns the KY registers (ขย.9–12): one rule per register for a valid row and the shop's defaults, recording a row inside the caller's transaction (a sale's capture, a confirmed goods receipt, or a manual entry), and reading a register by month or by sale. Sales still decides which lines need which form (ADR-0011).
+
+Store Configuration: every reader of the tenant settings goes through `db.StoreSettings` (`models.Settings.Effective`): built-in defaults when the document is missing, zero reorder/lookahead/expiry windows mean the default, a zero low-stock threshold is kept, and a blank or unknown timezone means Asia/Bangkok. `GET /settings` still returns the stored document for editing.
