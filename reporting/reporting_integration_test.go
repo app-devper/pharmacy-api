@@ -50,6 +50,7 @@ type shop struct {
 	mdb    *db.MongoDB
 	tz     *time.Location
 	drugID bson.ObjectID
+	bills  int
 }
 
 func newShop(t *testing.T) *shop {
@@ -86,27 +87,62 @@ func (s *shop) sell(qty int, discount float64) models.SaleResponse {
 	return out
 }
 
-func (s *shop) today() (reporting.Line, models.EodReport, float64) {
+// drug adds a drug in stock.
+func (s *shop) drug(name string, stock int) bson.ObjectID {
 	s.t.Helper()
-	start := reporting.DayStart(time.Now(), s.tz)
-	lines, err := reporting.Lines(s.ctx, s.mdb, start, start.AddDate(0, 0, 1))
+	res, err := s.mdb.Drugs().InsertOne(s.ctx, models.Drug{Name: name, SellPrice: 10, CostPrice: 4, Stock: stock})
 	if err != nil {
 		s.t.Fatal(err)
 	}
-	day, err := reporting.Day(s.ctx, s.mdb, time.Now(), s.tz)
+	return res.InsertedID.(bson.ObjectID)
+}
+
+// soldAt records a confirmed bill of one line at a given moment, the way a
+// late or replayed sale lands, bypassing the sales module's clock.
+func (s *shop) soldAt(at time.Time, drugID bson.ObjectID, qty int, subtotal, cost float64) {
+	s.t.Helper()
+	s.bills++
+	bill := s.bills
+	res, err := s.mdb.Sales().InsertOne(s.ctx, models.Sale{BillNo: fmt.Sprintf("T-%d", bill), Total: subtotal, Received: subtotal, SoldAt: at})
 	if err != nil {
 		s.t.Fatal(err)
 	}
-	daily := reporting.Daily(lines, s.tz)
+	if _, err := s.mdb.SaleItems().InsertOne(s.ctx, models.SaleItem{
+		SaleID: res.InsertedID.(bson.ObjectID), DrugID: drugID, DrugName: "x", Qty: qty, Subtotal: subtotal, CostSubtotal: cost,
+	}); err != nil {
+		s.t.Fatal(err)
+	}
+}
+
+// today is today's End-of-day report, today's daily-chart total, and the
+// shop drug's row of today's profit report.
+func (s *shop) today() (models.DrugProfit, models.EodReport, float64) {
+	s.t.Helper()
+	now := time.Now()
+	day, err := reporting.Day(s.ctx, s.mdb, now, s.tz)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	daily, err := reporting.Daily(s.ctx, s.mdb, now, 0)
+	if err != nil {
+		s.t.Fatal(err)
+	}
 	total := 0.0
 	if len(daily) == 1 {
 		total = daily[0].Total
 	}
-	var byDrug reporting.Line
-	for _, t := range reporting.ByDrug(lines) {
-		byDrug = reporting.Line{Qty: t.Qty, Revenue: t.Revenue, Cost: t.Cost}
+	date := now.In(s.tz).Format("2006-01-02")
+	profit, err := reporting.Profit(s.ctx, s.mdb, now, date, date)
+	if err != nil {
+		s.t.Fatal(err)
 	}
-	return byDrug, day, total
+	var drug models.DrugProfit
+	for _, row := range profit.ByDrug {
+		if row.DrugID == s.drugID.Hex() {
+			drug = row
+		}
+	}
+	return drug, day, total
 }
 
 func near(a, b float64) bool { return math.Abs(a-b) < 0.0001 }
@@ -121,7 +157,7 @@ func TestReportsAgreeWithEndOfDayOnADiscountedBill(t *testing.T) {
 	if !near(day.TotalSales, 34) || !near(daily, 34) || !near(drug.Revenue, 34) {
 		t.Fatalf("eod %.2f daily %.2f drug revenue %.2f, want 34", day.TotalSales, daily, drug.Revenue)
 	}
-	if !near(drug.Cost, 16) || drug.Qty != 4 {
+	if !near(drug.Cost, 16) || drug.QtySold != 4 {
 		t.Fatalf("drug totals %+v", drug)
 	}
 }
@@ -155,20 +191,128 @@ func TestReturningADiscountedBillRefundsWhatWasPaid(t *testing.T) {
 func TestDaysFollowThePharmacyTimezone(t *testing.T) {
 	s := newShop(t)
 	day := reporting.DayStart(time.Now(), s.tz).AddDate(0, 0, -1)
-	at := day.Add(30 * time.Minute)
-	res, err := s.mdb.Sales().InsertOne(s.ctx, models.Sale{BillNo: "T-1", Total: 50, Received: 50, SoldAt: at})
+	s.soldAt(day.Add(30*time.Minute), s.drugID, 5, 50, 20)
+	daily, err := reporting.Daily(s.ctx, s.mdb, time.Now(), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.mdb.SaleItems().InsertOne(s.ctx, models.SaleItem{SaleID: res.InsertedID.(bson.ObjectID), DrugID: s.drugID, Qty: 5, Subtotal: 50}); err != nil {
-		t.Fatal(err)
-	}
-	lines, err := reporting.Lines(s.ctx, s.mdb, day, day.AddDate(0, 0, 1))
-	if err != nil {
-		t.Fatal(err)
-	}
-	daily := reporting.Daily(lines, s.tz)
 	if len(daily) != 1 || daily[0].Day != day.Format("2006-01-02") || !near(daily[0].Total, 50) {
 		t.Fatalf("daily %+v, want one row for %s", daily, day.Format("2006-01-02"))
+	}
+}
+
+// SlowDrugs counts whole pharmacy days: a sale at 00:30 on the first day of
+// the window means the drug sold, whatever the time of day the report runs.
+func TestSlowDrugsCountsWholePharmacyDays(t *testing.T) {
+	s := newShop(t)
+	now := reporting.DayStart(time.Now(), s.tz).Add(23 * time.Hour)
+	sold := s.drug("Sold early on day one", 5)
+	idle := s.drug("Never sold", 5)
+	s.soldAt(reporting.DayStart(now, s.tz).AddDate(0, 0, -7).Add(30*time.Minute), sold, 1, 10, 4)
+
+	slow, err := reporting.SlowDrugs(s.ctx, s.mdb, now, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, d := range slow {
+		names = append(names, d.DrugName)
+		if d.DrugID == sold.Hex() {
+			t.Fatalf("slow drugs %v include a drug sold inside the window", names)
+		}
+	}
+	found := false
+	for _, d := range slow {
+		found = found || d.DrugID == idle.Hex()
+	}
+	if !found {
+		t.Fatalf("slow drugs %v leave out a drug that never sold", names)
+	}
+}
+
+func TestTopDrugsRankByNetQuantityAndSkipFullyReturned(t *testing.T) {
+	s := newShop(t)
+	now := time.Now()
+	a, b := s.drug("A", 10), s.drug("B", 10)
+	s.soldAt(now, a, 2, 20, 8)
+	s.soldAt(now, b, 5, 50, 20)
+	s.sell(1, 0)
+	if _, err := s.mdb.DrugReturns().InsertOne(s.ctx, models.DrugReturn{
+		ReturnedAt: now, Refund: 10,
+		Items: []models.ReturnItem{{DrugID: s.drugID, Qty: 1, Subtotal: 10}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	top, err := reporting.TopDrugs(s.ctx, s.mdb, now, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(top) != 2 || top[0].DrugID != b.Hex() || top[1].DrugID != a.Hex() {
+		t.Fatalf("top drugs %+v, want B then A and no fully returned drug", top)
+	}
+}
+
+func TestProfitTotalsMarginsAndBillsOverTheDates(t *testing.T) {
+	s := newShop(t)
+	now := time.Now()
+	today := reporting.DayStart(now, s.tz)
+	s.soldAt(today.Add(time.Hour), s.drugID, 2, 20, 8)
+	s.soldAt(today.AddDate(0, 0, -40), s.drugID, 9, 90, 36) // outside
+	date := today.Format("2006-01-02")
+	p, err := reporting.Profit(s.ctx, s.mdb, now, date, date)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Summary.Bills != 1 || !near(p.Summary.Revenue, 20) || !near(p.Summary.Profit, 12) || !near(p.Summary.Margin, 60) {
+		t.Fatalf("summary %+v", p.Summary)
+	}
+	if len(p.ByDrug) != 1 || !near(p.ByDrug[0].Margin, 60) {
+		t.Fatalf("by drug %+v", p.ByDrug)
+	}
+}
+
+func TestReorderProjectsDemandOverTheLookahead(t *testing.T) {
+	s := newShop(t)
+	now := time.Now()
+	short := s.drug("Short", 2)
+	enough := s.drug("Enough", 100)
+	out := s.drug("Out", 0)
+	for _, id := range []bson.ObjectID{short, enough, out} {
+		s.soldAt(now, id, 30, 300, 120) // 1 a day over 30 days
+	}
+	got, err := reporting.Reorder(s.ctx, s.mdb, now, 30, 14)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].DrugID != out.Hex() || got[1].DrugID != short.Hex() {
+		t.Fatalf("reorder %+v, want Out then Short", got)
+	}
+	if got[1].SuggestedQty != 12 || !near(got[1].DaysLeft, 2) {
+		t.Fatalf("short %+v, want 14 needed less 2 on hand, 2 days left", got[1])
+	}
+}
+
+func TestDashboardChartsAgreeWithTheirReports(t *testing.T) {
+	s := newShop(t)
+	now := time.Now()
+	s.sell(2, 0)
+	voided := s.sell(1, 0)
+	if _, err := s.mdb.Sales().UpdateOne(s.ctx, bson.M{"bill_no": voided.BillNo}, bson.M{"$set": bson.M{"voided": true}}); err != nil {
+		t.Fatal(err)
+	}
+	dash, err := reporting.Dashboard(s.ctx, s.mdb, now, 7, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	daily, _ := reporting.Daily(s.ctx, s.mdb, now, 7)
+	monthly, _ := reporting.Monthly(s.ctx, s.mdb, now, 12)
+	if fmt.Sprint(dash.Daily) != fmt.Sprint(daily) || fmt.Sprint(dash.Monthly) != fmt.Sprint(monthly) {
+		t.Fatalf("dashboard charts %v %v, reports %v %v", dash.Daily, dash.Monthly, daily, monthly)
+	}
+	if len(dash.RecentSales) != 1 || dash.RecentSales[0].Voided {
+		t.Fatalf("recent sales %+v, want the one confirmed bill", dash.RecentSales)
+	}
+	if !near(dash.Summary.TodaySales, 20) || dash.Summary.TodayBills != 1 {
+		t.Fatalf("summary %+v", dash.Summary)
 	}
 }
