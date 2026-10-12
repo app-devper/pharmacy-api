@@ -1,16 +1,15 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
-	"regexp"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"go.mongodb.org/mongo-driver/v2/bson"
-	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	"pharmacy-pos/backend/compliance"
 	"pharmacy-pos/backend/db"
 	mw "pharmacy-pos/backend/middleware"
 	"pharmacy-pos/backend/models"
@@ -21,16 +20,23 @@ type ExportHandler struct{ dbm *db.Manager }
 
 func NewExportHandler(d *db.Manager) *ExportHandler { return &ExportHandler{dbm: d} }
 
-var monthPattern = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}$`)
+// printRegister reads a register oldest first, as it is printed, and renders it.
+func printRegister[T compliance.Row](ctx context.Context, mdb *db.MongoDB, month string, render func([]T, string) (*bytes.Buffer, error)) (*bytes.Buffer, error) {
+	rows, err := compliance.Month[T](ctx, mdb, month, compliance.OldestFirst)
+	if err != nil {
+		return nil, err
+	}
+	return render(rows, month)
+}
 
+// Export — GET /export/{form}?month=YYYY-MM: the register as a PDF.
 func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
-	form := chi.URLParam(r, "form")
-	month := r.URL.Query().Get("month")
-
-	if month != "" && !monthPattern.MatchString(month) {
-		jsonError(w, "month must be YYYY-MM", http.StatusBadRequest)
+	form, ok := compliance.ParseForm(chi.URLParam(r, "form"))
+	if !ok {
+		jsonError(w, "unknown form: "+chi.URLParam(r, "form"), http.StatusBadRequest)
 		return
 	}
+	month := r.URL.Query().Get("month")
 
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
@@ -40,100 +46,22 @@ func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
-	filter := bson.M{}
-	if month != "" {
-		filter = bson.M{"date": bson.M{"$regex": "^" + regexp.QuoteMeta(month)}}
-	}
-	sortOpt := options.Find().SetSort(bson.D{{Key: "date", Value: 1}})
-
-	filename := fmt.Sprintf("%s-%s.pdf", form, month)
-
+	var b *bytes.Buffer
 	switch form {
-	case "ky9":
-		cur, e := mdb.Ky9().Find(ctx, filter, sortOpt)
-		if e != nil {
-			jsonError(w, e.Error(), http.StatusInternalServerError)
-			return
-		}
-		var rows []models.Ky9
-		if err := cur.All(ctx, &rows); err != nil {
-			jsonError(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		b, e := pdf.GenerateKy9(rows, month)
-		if e != nil {
-			jsonError(w, e.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/pdf")
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
-		w.Write(b.Bytes())
-		return
-
-	case "ky10":
-		cur, e := mdb.Ky10().Find(ctx, filter, sortOpt)
-		if e != nil {
-			jsonError(w, e.Error(), http.StatusInternalServerError)
-			return
-		}
-		var rows []models.Ky10
-		if err := cur.All(ctx, &rows); err != nil {
-			jsonError(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		b, e := pdf.GenerateKy10(rows, month)
-		if e != nil {
-			jsonError(w, e.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/pdf")
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
-		w.Write(b.Bytes())
-		return
-
-	case "ky11":
-		cur, e := mdb.Ky11().Find(ctx, filter, sortOpt)
-		if e != nil {
-			jsonError(w, e.Error(), http.StatusInternalServerError)
-			return
-		}
-		var rows []models.Ky11
-		if err := cur.All(ctx, &rows); err != nil {
-			jsonError(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		b, e := pdf.GenerateKy11(rows, month)
-		if e != nil {
-			jsonError(w, e.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/pdf")
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
-		w.Write(b.Bytes())
-		return
-
-	case "ky12":
-		cur, e := mdb.Ky12().Find(ctx, filter, sortOpt)
-		if e != nil {
-			jsonError(w, e.Error(), http.StatusInternalServerError)
-			return
-		}
-		var rows []models.Ky12
-		if err := cur.All(ctx, &rows); err != nil {
-			jsonError(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		b, e := pdf.GenerateKy12(rows, month)
-		if e != nil {
-			jsonError(w, e.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/pdf")
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
-		w.Write(b.Bytes())
-		return
-
-	default:
-		jsonError(w, "unknown form: "+form, http.StatusBadRequest)
+	case compliance.Ky9:
+		b, err = printRegister[models.Ky9](ctx, mdb, month, pdf.GenerateKy9)
+	case compliance.Ky10:
+		b, err = printRegister[models.Ky10](ctx, mdb, month, pdf.GenerateKy10)
+	case compliance.Ky11:
+		b, err = printRegister[models.Ky11](ctx, mdb, month, pdf.GenerateKy11)
+	case compliance.Ky12:
+		b, err = printRegister[models.Ky12](ctx, mdb, month, pdf.GenerateKy12)
 	}
+	if err != nil {
+		writeCommandError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s-%s.pdf\"", form, month))
+	w.Write(b.Bytes())
 }

@@ -17,6 +17,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	"pharmacy-pos/backend/compliance"
 	"pharmacy-pos/backend/db"
 	"pharmacy-pos/backend/inventory"
 	"pharmacy-pos/backend/models"
@@ -163,11 +164,10 @@ func Confirm(ctx context.Context, mdb *db.MongoDB, id string) (models.PurchaseOr
 			}); err != nil {
 				return err
 			}
-			ky9 := models.Ky9Input{
+			if _, err := compliance.RecordKy9(txCtx, mdb, models.Ky9Input{
 				Date: receiveDay, DrugName: drug.Name, RegNo: drug.RegNo, Unit: drug.Unit, Qty: item.Qty,
 				PricePerUnit: item.CostPrice, Seller: po.Supplier, InvoiceNo: po.InvoiceNo,
-			}.Record(now)
-			if _, err := mdb.Ky9().InsertOne(txCtx, ky9); err != nil {
+			}, now); err != nil {
 				return err
 			}
 		}
