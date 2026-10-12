@@ -18,6 +18,6 @@ Sensitive reads include customer-identifying data, sale history and bill items, 
 
 [AGENTS.md](../AGENTS.md) describes live UM verification and the four-role permission split.
 
-Inventory: every stock change runs in the [inventory module](../inventory/) (ADR-0007); `GET /inventory/drift` lists lot-tracked drugs whose stock and lots disagree.
+Inventory: every stock change runs in the [inventory module](../inventory/) (ADR-0007), and its views (next lot, a drug's lots, expiring lots, low stock and the dashboard's stock summary) answer with the same sellable-lot and low-stock rules the commands use; `GET /inventory/drift` lists lot-tracked drugs whose stock and lots disagree.
 
 Reporting: every report and the End-of-day close use the [reporting module](../reporting/) (ADR-0008): pharmacy timezone, end-exclusive periods, amounts as paid after the bill discount.
