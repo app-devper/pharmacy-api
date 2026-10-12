@@ -12,29 +12,19 @@ import (
 // SettingsKey is the key of the tenant's single settings document.
 const SettingsKey = "singleton"
 
-// defaultLocation is used when the tenant has not configured a timezone (or
-// the configured one cannot be loaded). The app originated in Thailand.
-var defaultLocation = func() *time.Location {
-	if loc, err := time.LoadLocation(models.DefaultTimezone); err == nil {
-		return loc
-	}
-	return time.FixedZone("Asia/Bangkok", 7*60*60)
-}()
-
-// Timezone returns the tenant's configured Settings.Timezone, falling back to
-// Asia/Bangkok when the settings document is missing, the field is blank, or
-// the IANA name cannot be loaded.
-func (m *MongoDB) Timezone(ctx context.Context) *time.Location {
+// StoreSettings is the tenant's settings as the shop runs on them
+// (models.Settings.Effective): the built-in defaults when the document is
+// missing or cannot be read. Every reader of settings goes through here, so
+// there is one fallback rule.
+func (m *MongoDB) StoreSettings(ctx context.Context) models.Settings {
 	var s models.Settings
 	if err := m.Settings().FindOne(ctx, bson.M{"key": SettingsKey}).Decode(&s); err != nil {
-		return defaultLocation
+		return models.DefaultSettings().Effective()
 	}
-	if s.Timezone == "" {
-		return defaultLocation
-	}
-	loc, err := time.LoadLocation(s.Timezone)
-	if err != nil {
-		return defaultLocation
-	}
-	return loc
+	return s.Effective()
+}
+
+// Timezone is the tenant's timezone (StoreSettings().Location()).
+func (m *MongoDB) Timezone(ctx context.Context) *time.Location {
+	return m.StoreSettings(ctx).Location()
 }

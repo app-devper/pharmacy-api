@@ -124,9 +124,5 @@ func stockOf(ctx context.Context, mdb *db.MongoDB, drugID bson.ObjectID) (int, e
 }
 
 func loadSettings(ctx context.Context, mdb *db.MongoDB) models.Settings {
-	var s models.Settings
-	if err := mdb.Settings().FindOne(ctx, bson.M{"key": db.SettingsKey}).Decode(&s); err != nil {
-		return models.DefaultSettings()
-	}
-	return s
+	return mdb.StoreSettings(ctx)
 }

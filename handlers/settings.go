@@ -23,30 +23,10 @@ func NewSettingsHandler(d *db.Manager) *SettingsHandler { return &SettingsHandle
 
 const settingsKey = db.SettingsKey
 
-// loadStockSettings fetches the tenant's stock config. On any error (missing
-// document, DB down, decode failure) it silently falls back to built-in
-// defaults so calling handlers never break.
-//
-// Note on zero-values:
-//   - LowStockThreshold = 0 is a VALID explicit choice ("never flag low-stock")
-//     and is therefore preserved as-is from the DB.
-//   - ReorderDays / ReorderLookahead / ExpiringDays of 0 are not meaningful
-//     (can't compute a rate over 0 days), so they fall back to defaults.
+// loadStockSettings is the tenant's effective stock thresholds
+// (db.StoreSettings decides the fallbacks).
 func loadStockSettings(ctx context.Context, mdb *db.MongoDB) models.StockSettings {
-	var s models.Settings
-	if err := mdb.Settings().FindOne(ctx, bson.M{"key": settingsKey}).Decode(&s); err != nil {
-		return models.DefaultSettings().Stock
-	}
-	if s.Stock.ReorderDays <= 0 {
-		s.Stock.ReorderDays = models.DefaultReorderDays
-	}
-	if s.Stock.ReorderLookahead <= 0 {
-		s.Stock.ReorderLookahead = models.DefaultReorderLookahead
-	}
-	if s.Stock.ExpiringDays <= 0 {
-		s.Stock.ExpiringDays = models.DefaultExpiringDays
-	}
-	return s.Stock
+	return mdb.StoreSettings(ctx).Stock
 }
 
 // Get returns the tenant's settings document, creating a default if none exists.

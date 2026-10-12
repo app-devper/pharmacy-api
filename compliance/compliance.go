@@ -53,14 +53,9 @@ type Defaults struct {
 	Pharmacist   string // ขย.11 pharmacist
 }
 
-// LoadDefaults reads the shop's defaults from its settings; none when the
-// settings cannot be read.
+// LoadDefaults reads the shop's defaults from its settings.
 func LoadDefaults(ctx context.Context, mdb *db.MongoDB) Defaults {
-	var s models.Settings
-	if err := mdb.Settings().FindOne(ctx, bson.M{"key": db.SettingsKey}).Decode(&s); err != nil {
-		return Defaults{}
-	}
-	return DefaultsFrom(s)
+	return DefaultsFrom(mdb.StoreSettings(ctx))
 }
 
 // DefaultsFrom is the defaults in settings a caller already read.
