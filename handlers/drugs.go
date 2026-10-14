@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	"pharmacy-pos/backend/catalog"
 	"pharmacy-pos/backend/db"
 	"pharmacy-pos/backend/inventory"
 	mw "pharmacy-pos/backend/middleware"
@@ -23,181 +23,6 @@ import (
 type DrugHandler struct{ dbm *db.Manager }
 
 func NewDrugHandler(d *db.Manager) *DrugHandler { return &DrugHandler{dbm: d} }
-
-// validateAltUnits trims names and enforces the multi-unit invariants:
-// factor >= 2, non-empty unique names that don't clash with the base unit,
-// sell_price >= 0. Returns the normalised slice or an error. Also normalises
-// the PriceTiers on each alt unit (Retail falls back to SellPrice if 0).
-func validateAltUnits(alts []models.AltUnit, baseUnit string) ([]models.AltUnit, error) {
-	if len(alts) == 0 {
-		return []models.AltUnit{}, nil
-	}
-	out := make([]models.AltUnit, 0, len(alts))
-	seen := make(map[string]struct{}, len(alts))
-	for i, a := range alts {
-		a.Name = strings.TrimSpace(a.Name)
-		a.Barcode = strings.TrimSpace(a.Barcode)
-		if a.Name == "" {
-			return nil, fmt.Errorf("alt_units[%d].name is required", i)
-		}
-		if a.Name == baseUnit {
-			return nil, fmt.Errorf("alt_units[%d].name ต้องต่างจากหน่วยหลัก (%s)", i, baseUnit)
-		}
-		if _, dup := seen[a.Name]; dup {
-			return nil, fmt.Errorf("alt_units[%d].name %q ซ้ำ", i, a.Name)
-		}
-		seen[a.Name] = struct{}{}
-		if a.Factor < 2 {
-			return nil, fmt.Errorf("alt_units[%d].factor ต้อง >= 2 (ถ้า = 1 ให้ใช้หน่วยหลักแทน)", i)
-		}
-		if a.SellPrice < 0 {
-			return nil, fmt.Errorf("alt_units[%d].sell_price ต้อง >= 0", i)
-		}
-		tiers, err := validatePriceTiers(a.Prices, a.SellPrice)
-		if err != nil {
-			return nil, fmt.Errorf("alt_units[%d]: %w", i, err)
-		}
-		a.Prices = tiers
-		// Keep SellPrice in sync with Retail so legacy code keeps working.
-		a.SellPrice = tiers[models.TierRetail]
-		out = append(out, a)
-	}
-	return out, nil
-}
-
-// validatePriceTiers normalises the dynamic tier map:
-// - rejects negatives
-// - drops entries whose value is 0 (except retail)
-// - ensures retail has a value, falling back to `retailFallback` (typically SellPrice)
-// - trims tier keys
-func validatePriceTiers(p models.PriceTiers, retailFallback float64) (models.PriceTiers, error) {
-	out := models.PriceTiers{}
-	for k, v := range p {
-		k = strings.TrimSpace(k)
-		if k == "" {
-			continue
-		}
-		if v < 0 {
-			return nil, fmt.Errorf("ราคา tier %q ต้อง >= 0", k)
-		}
-		// Retail is always kept (even if 0 — gets overwritten by fallback below).
-		// Other tiers with 0 are treated as "not set" and dropped.
-		if v == 0 && k != models.TierRetail {
-			continue
-		}
-		out[k] = v
-	}
-	if out[models.TierRetail] == 0 && retailFallback > 0 {
-		out[models.TierRetail] = retailFallback
-	}
-	return out, nil
-}
-
-func buildDrugCreatePayload(input models.DrugInput, now time.Time, loc *time.Location) (models.Drug, *models.DrugLot, error) {
-	if input.Name == "" {
-		return models.Drug{}, nil, errors.New("name is required")
-	}
-	if len(input.Name) > 255 {
-		return models.Drug{}, nil, errors.New("name too long (max 255)")
-	}
-	if input.Type == "" {
-		input.Type = "ยาสามัญ"
-	}
-	if input.Unit == "" {
-		input.Unit = "ชิ้น"
-	}
-	if input.ReportTypes == nil {
-		input.ReportTypes = []string{}
-	}
-	input.Barcode = strings.TrimSpace(input.Barcode)
-
-	altUnits, err := validateAltUnits(input.AltUnits, input.Unit)
-	if err != nil {
-		return models.Drug{}, nil, err
-	}
-
-	// Base-unit tier prices. Retail falls back to SellPrice for backward compat.
-	priceTiers, err := validatePriceTiers(input.Prices, input.SellPrice)
-	if err != nil {
-		return models.Drug{}, nil, err
-	}
-	// Keep SellPrice in sync with Retail so legacy readers see the expected value.
-	input.SellPrice = priceTiers[models.TierRetail]
-
-	// Reject negative stock outright.
-	if input.Stock < 0 {
-		return models.Drug{}, nil, errors.New("stock must be >= 0")
-	}
-	initialStock := input.Stock
-	// Enforce: stock > 0 requires create_lot so drug.stock is always backed by a real lot.
-	if input.Stock > 0 && input.CreateLot == nil {
-		return models.Drug{}, nil, errors.New("create_lot is required when stock > 0")
-	}
-	var createLot *models.DrugLot
-	if input.CreateLot != nil {
-		input.CreateLot.LotNumber = strings.TrimSpace(input.CreateLot.LotNumber)
-		if input.CreateLot.LotNumber == "" {
-			return models.Drug{}, nil, errors.New("create_lot.lot_number is required")
-		}
-		if input.CreateLot.Quantity <= 0 {
-			return models.Drug{}, nil, errors.New("create_lot.quantity must be > 0")
-		}
-		if input.CreateLot.ExpiryDate == "" {
-			return models.Drug{}, nil, errors.New("create_lot.expiry_date is required")
-		}
-
-		expiry, err := time.ParseInLocation("2006-01-02", input.CreateLot.ExpiryDate, loc)
-		if err != nil {
-			return models.Drug{}, nil, errors.New("create_lot.expiry_date must be YYYY-MM-DD")
-		}
-		today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-		if !expiry.After(today) {
-			return models.Drug{}, nil, errors.New("create_lot.expiry_date must be in the future")
-		}
-		importDate := now
-		if input.CreateLot.ImportDate != "" {
-			parsed, err := time.ParseInLocation("2006-01-02", input.CreateLot.ImportDate, loc)
-			if err != nil {
-				return models.Drug{}, nil, errors.New("create_lot.import_date must be YYYY-MM-DD")
-			}
-			importDate = parsed
-		}
-		if input.Stock != 0 && input.Stock != input.CreateLot.Quantity {
-			return models.Drug{}, nil, errors.New("stock must be 0 or equal create_lot.quantity when create_lot is provided")
-		}
-		initialStock = input.CreateLot.Quantity
-		createLot = &models.DrugLot{
-			DrugName:   input.Name,
-			LotNumber:  input.CreateLot.LotNumber,
-			ExpiryDate: expiry,
-			ImportDate: importDate,
-			CostPrice:  input.CreateLot.CostPrice,
-			SellPrice:  input.CreateLot.SellPrice,
-			Quantity:   input.CreateLot.Quantity,
-			Remaining:  input.CreateLot.Quantity,
-			CreatedAt:  now,
-		}
-	}
-
-	drug := models.Drug{
-		Name:        input.Name,
-		GenericName: input.GenericName,
-		Type:        input.Type,
-		Strength:    input.Strength,
-		Barcode:     input.Barcode,
-		SellPrice:   input.SellPrice,
-		CostPrice:   input.CostPrice,
-		Stock:       initialStock,
-		MinStock:    input.MinStock,
-		RegNo:       input.RegNo,
-		Unit:        input.Unit,
-		ReportTypes: input.ReportTypes,
-		AltUnits:    altUnits,
-		Prices:      priceTiers,
-		CreatedAt:   now,
-	}
-	return drug, createLot, nil
-}
 
 func (h *DrugHandler) List(w http.ResponseWriter, r *http.Request) {
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
@@ -272,9 +97,9 @@ func (h *DrugHandler) Add(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	tz := mdb.Timezone(ctx)
-	drug, createLot, err := buildDrugCreatePayload(input, time.Now().In(tz), tz)
+	drug, createLot, err := catalog.NewDrug(input, time.Now().In(tz), tz)
 	if err != nil {
-		jsonError(w, err.Error(), http.StatusBadRequest)
+		writeCommandError(w, err)
 		return
 	}
 	if err := mdb.WithTransaction(ctx, func(txCtx context.Context) error {
@@ -327,26 +152,11 @@ func (h *DrugHandler) Update(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	if len(input.Name) > 255 {
-		jsonError(w, "name too long (max 255)", http.StatusBadRequest)
-		return
-	}
-	if input.ReportTypes == nil {
-		input.ReportTypes = []string{}
-	}
-	input.Barcode = strings.TrimSpace(input.Barcode)
-
-	altUnits, err := validateAltUnits(input.AltUnits, input.Unit)
+	input, err = catalog.Edit(input)
 	if err != nil {
-		jsonError(w, err.Error(), http.StatusBadRequest)
+		writeCommandError(w, err)
 		return
 	}
-	priceTiers, err := validatePriceTiers(input.Prices, input.SellPrice)
-	if err != nil {
-		jsonError(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	input.SellPrice = priceTiers[models.TierRetail]
 
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
@@ -370,8 +180,8 @@ func (h *DrugHandler) Update(w http.ResponseWriter, r *http.Request) {
 			"reg_no":       input.RegNo,
 			"unit":         input.Unit,
 			"report_types": input.ReportTypes,
-			"alt_units":    altUnits,
-			"prices":       priceTiers,
+			"alt_units":    input.AltUnits,
+			"prices":       input.Prices,
 		}},
 	)
 	if err != nil {
@@ -434,51 +244,19 @@ func (h *DrugHandler) BulkImport(w http.ResponseWriter, r *http.Request) {
 	result := BulkImportResult{Errors: []BulkImportRowError{}}
 	for i, inp := range input.Drugs {
 		row := i + 2 // row 1 = header in the Excel sheet
-		if inp.Name == "" {
+		if strings.TrimSpace(inp.Name) == "" {
 			result.Errors = append(result.Errors, BulkImportRowError{Row: row, Name: "-", Message: "ชื่อยาห้ามว่าง"})
 			continue
 		}
-		if inp.SellPrice < 0 {
-			result.Errors = append(result.Errors, BulkImportRowError{Row: row, Name: inp.Name, Message: "ราคาขายต้องไม่ติดลบ"})
+		drug, err := catalog.ImportedDrug(inp, time.Now())
+		if err != nil {
+			result.Errors = append(result.Errors, BulkImportRowError{Row: row, Name: inp.Name, Message: err.Error()})
 			continue
-		}
-		if inp.CostPrice < 0 {
-			result.Errors = append(result.Errors, BulkImportRowError{Row: row, Name: inp.Name, Message: "ราคาทุนต้องไม่ติดลบ"})
-			continue
-		}
-		if inp.Stock < 0 {
-			inp.Stock = 0 // clamp negative → 0
-		}
-		if inp.Type == "" {
-			inp.Type = "ยาสามัญ"
-		}
-		if inp.Unit == "" {
-			inp.Unit = "ชิ้น"
-		}
-		if inp.ReportTypes == nil {
-			inp.ReportTypes = []string{}
-		}
-		inp.Barcode = strings.TrimSpace(inp.Barcode)
-
-		drug := models.Drug{
-			Name:        inp.Name,
-			GenericName: inp.GenericName,
-			Type:        inp.Type,
-			Strength:    inp.Strength,
-			Barcode:     inp.Barcode,
-			SellPrice:   inp.SellPrice,
-			CostPrice:   inp.CostPrice,
-			Stock:       inp.Stock,
-			MinStock:    inp.MinStock,
-			RegNo:       inp.RegNo,
-			Unit:        inp.Unit,
-			ReportTypes: inp.ReportTypes,
-			CreatedAt:   time.Now(),
 		}
 		// Stock imported without lot data goes into an OPENING lot, so the
 		// drug's stock and lots agree (ADR-0007).
 		ctx, cancel := context.WithTimeout(bulkCtx, 5*time.Second)
-		err := mdb.WithTransaction(ctx, func(txCtx context.Context) error {
+		err = mdb.WithTransaction(ctx, func(txCtx context.Context) error {
 			res, err := mdb.Drugs().InsertOne(txCtx, drug)
 			if err != nil {
 				return err

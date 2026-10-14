@@ -3,13 +3,10 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
-	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
@@ -29,7 +26,8 @@ func loadStockSettings(ctx context.Context, mdb *db.MongoDB) models.StockSetting
 	return mdb.StoreSettings(ctx).Stock
 }
 
-// Get returns the tenant's settings document, creating a default if none exists.
+// Get returns the settings the shop runs on (db.StoreSettings): the built-in
+// defaults until the shop first saves. Reading never writes.
 // GET /api/pharmacy/v1/settings
 func (h *SettingsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
@@ -39,24 +37,10 @@ func (h *SettingsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-
-	var s models.Settings
-	err = mdb.Settings().FindOne(ctx, bson.M{"key": settingsKey}).Decode(&s)
-	if errors.Is(err, mongo.ErrNoDocuments) {
-		s = models.DefaultSettings()
-		s.UpdatedAt = time.Now()
-		_, _ = mdb.Settings().InsertOne(ctx, s)
-		jsonOK(w, s)
-		return
-	}
-	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	jsonOK(w, s)
+	jsonOK(w, mdb.StoreSettings(ctx))
 }
 
-// Update upserts the settings document. ADMIN or SUPER only.
+// Update stores an edit as models.SettingsInput.Accept decides. ADMIN or SUPER only.
 // PUT /api/pharmacy/v1/settings
 func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	var input models.SettingsInput
@@ -64,67 +48,10 @@ func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-
-	// Trim whitespace on every string so blank-looking inputs are stored empty.
-	input.Store.Name = strings.TrimSpace(input.Store.Name)
-	input.Store.Address = strings.TrimSpace(input.Store.Address)
-	input.Store.Phone = strings.TrimSpace(input.Store.Phone)
-	input.Store.TaxID = strings.TrimSpace(input.Store.TaxID)
-	input.Receipt.Header = strings.TrimSpace(input.Receipt.Header)
-	input.Receipt.Footer = strings.TrimSpace(input.Receipt.Footer)
-	input.Pharmacist.Name = strings.TrimSpace(input.Pharmacist.Name)
-	input.Pharmacist.LicenseNo = strings.TrimSpace(input.Pharmacist.LicenseNo)
-	input.KY.DefaultBuyerAddress = strings.TrimSpace(input.KY.DefaultBuyerAddress)
-
-	if input.Store.Name == "" {
-		jsonError(w, "ชื่อร้านห้ามว่าง", http.StatusBadRequest)
+	s, err := input.Accept()
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
-	}
-	switch input.Receipt.PaperWidth {
-	case "58", "80":
-		// ok
-	case "":
-		input.Receipt.PaperWidth = "58"
-	default:
-		jsonError(w, "paper_width ต้องเป็น 58 หรือ 80 เท่านั้น", http.StatusBadRequest)
-		return
-	}
-
-	// Timezone — blank falls back to default. Reject unknown IANA names so the
-	// stored value is always usable by loadTimezone() without silent drift.
-	input.Timezone = strings.TrimSpace(input.Timezone)
-	if input.Timezone == "" {
-		input.Timezone = models.DefaultTimezone
-	}
-	if _, err := time.LoadLocation(input.Timezone); err != nil {
-		jsonError(w, "timezone ไม่ถูกต้อง (ต้องเป็น IANA เช่น Asia/Bangkok)", http.StatusBadRequest)
-		return
-	}
-
-	// Stock defaults — clamp to sane ranges.
-	// low_stock_threshold = 0 is allowed (means "never flag low-stock unless
-	// the individual drug.min_stock is set"). Only negative is rejected.
-	if input.Stock.LowStockThreshold < 0 {
-		jsonError(w, "low_stock_threshold ต้องไม่ติดลบ", http.StatusBadRequest)
-		return
-	}
-	if input.Stock.ReorderDays <= 0 {
-		input.Stock.ReorderDays = models.DefaultReorderDays
-	}
-	if input.Stock.ReorderDays > 365 {
-		input.Stock.ReorderDays = 365
-	}
-	if input.Stock.ReorderLookahead <= 0 {
-		input.Stock.ReorderLookahead = models.DefaultReorderLookahead
-	}
-	if input.Stock.ReorderLookahead > 180 {
-		input.Stock.ReorderLookahead = 180
-	}
-	if input.Stock.ExpiringDays <= 0 {
-		input.Stock.ExpiringDays = models.DefaultExpiringDays
-	}
-	if input.Stock.ExpiringDays > 365 {
-		input.Stock.ExpiringDays = 365
 	}
 
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
@@ -135,17 +62,17 @@ func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	now := time.Now()
+	s.UpdatedAt = time.Now()
 	update := bson.M{
 		"$set": bson.M{
 			"key":        settingsKey,
-			"store":      input.Store,
-			"receipt":    input.Receipt,
-			"stock":      input.Stock,
-			"pharmacist": input.Pharmacist,
-			"ky":         input.KY,
-			"timezone":   input.Timezone,
-			"updated_at": now,
+			"store":      s.Store,
+			"receipt":    s.Receipt,
+			"stock":      s.Stock,
+			"pharmacist": s.Pharmacist,
+			"ky":         s.KY,
+			"timezone":   s.Timezone,
+			"updated_at": s.UpdatedAt,
 		},
 	}
 	if _, err := mdb.Settings().UpdateOne(ctx,
@@ -156,15 +83,5 @@ func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	jsonOK(w, models.Settings{
-		Key:        settingsKey,
-		Store:      input.Store,
-		Receipt:    input.Receipt,
-		Stock:      input.Stock,
-		Pharmacist: input.Pharmacist,
-		KY:         input.KY,
-		Timezone:   input.Timezone,
-		UpdatedAt:  now,
-	})
+	jsonOK(w, s)
 }
