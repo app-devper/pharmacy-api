@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,5 +115,22 @@ func TestASalesRowsAreReadBackBySale(t *testing.T) {
 	}
 	if len(got.Ky10) != 1 || len(got.Ky11) != 0 || len(got.Ky12) != 1 || got.Ky10[0].Balance != 4 || got.Ky12[0].TotalValue != 36 || got.Ky12[0].Status != compliance.PaidStatus {
 		t.Fatalf("by sale %+v", got)
+	}
+}
+
+func TestAPrintedRegisterIsAPDFOfThatMonth(t *testing.T) {
+	ctx, mdb := shop(t)
+	if _, err := compliance.RecordKy9(ctx, mdb, models.Ky9Input{Date: "2026-05-02", DrugName: "x", Qty: 2, PricePerUnit: 3}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	b, err := compliance.Print(ctx, mdb, compliance.Ky9, "2026-05")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(b.String(), "%PDF") {
+		t.Fatal("not a PDF")
+	}
+	if _, err := compliance.Print(ctx, mdb, compliance.Form("ky13"), "2026-05"); err == nil {
+		t.Fatal("printed a register that does not exist")
 	}
 }

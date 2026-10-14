@@ -29,6 +29,9 @@ type StoreInfo struct {
 	Address string `bson:"address" json:"address"`
 	Phone   string `bson:"phone"   json:"phone"`
 	TaxID   string `bson:"tax_id"  json:"tax_id"`
+	// LicenseNo is the shop's drug-selling licence (ใบอนุญาตขายยา, e.g.
+	// "ขย. 12345/2567"), printed on the ขย. registers.
+	LicenseNo string `bson:"license_no,omitempty" json:"license_no"`
 }
 
 type ReceiptSettings struct {

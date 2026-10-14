@@ -70,6 +70,7 @@ func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	input.Store.Address = strings.TrimSpace(input.Store.Address)
 	input.Store.Phone = strings.TrimSpace(input.Store.Phone)
 	input.Store.TaxID = strings.TrimSpace(input.Store.TaxID)
+	input.Store.LicenseNo = strings.TrimSpace(input.Store.LicenseNo)
 	input.Receipt.Header = strings.TrimSpace(input.Receipt.Header)
 	input.Receipt.Footer = strings.TrimSpace(input.Receipt.Footer)
 	input.Pharmacist.Name = strings.TrimSpace(input.Pharmacist.Name)
