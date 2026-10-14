@@ -63,7 +63,7 @@ func (h *CustomerHandler) Add(w http.ResponseWriter, r *http.Request) {
 		input.Disease = "-"
 	}
 	if !models.IsValidPriceTier(input.PriceTier) {
-		jsonError(w, "price_tier ต้องเป็น retail|regular|wholesale หรือว่าง", http.StatusBadRequest)
+		jsonError(w, "price_tier ต้องเป็นชื่อ tier ที่ไม่เกิน 32 ตัวอักษร หรือว่าง (= retail)", http.StatusBadRequest)
 		return
 	}
 
@@ -117,7 +117,7 @@ func (h *CustomerHandler) Update(w http.ResponseWriter, r *http.Request) {
 		input.Disease = "-"
 	}
 	if !models.IsValidPriceTier(input.PriceTier) {
-		jsonError(w, "price_tier ต้องเป็น retail|regular|wholesale หรือว่าง", http.StatusBadRequest)
+		jsonError(w, "price_tier ต้องเป็นชื่อ tier ที่ไม่เกิน 32 ตัวอักษร หรือว่าง (= retail)", http.StatusBadRequest)
 		return
 	}
 
