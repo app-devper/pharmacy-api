@@ -39,3 +39,59 @@ func TestDefaultSettingsAreAlreadyEffective(t *testing.T) {
 		t.Fatal("the built-in defaults change when made effective")
 	}
 }
+
+func TestEffectiveCapsWindowsAndPaperWidth(t *testing.T) {
+	got := Settings{Stock: StockSettings{ReorderDays: 999, ReorderLookahead: 999, ExpiringDays: 999}, Receipt: ReceiptSettings{PaperWidth: "72"}}.Effective()
+	if got.Stock.ReorderDays != MaxReorderDays || got.Stock.ReorderLookahead != MaxReorderLookahead || got.Stock.ExpiringDays != MaxExpiringDays {
+		t.Fatalf("windows not capped: %+v", got.Stock)
+	}
+	if got.Receipt.PaperWidth != "58" {
+		t.Fatalf("paper width %q, want 58", got.Receipt.PaperWidth)
+	}
+}
+
+func TestAcceptRefusesWhatTheShopCannotRunOn(t *testing.T) {
+	ok := SettingsInput{Store: StoreInfo{Name: "ร้านยา ก"}}
+	cases := map[string]func(*SettingsInput){
+		"blank shop name":    func(in *SettingsInput) { in.Store.Name = "   " },
+		"paper width":        func(in *SettingsInput) { in.Receipt.PaperWidth = "72" },
+		"unknown timezone":   func(in *SettingsInput) { in.Timezone = "Mars/Olympus" },
+		"negative threshold": func(in *SettingsInput) { in.Stock.LowStockThreshold = -1 },
+	}
+	for name, spoil := range cases {
+		t.Run(name, func(t *testing.T) {
+			in := ok
+			spoil(&in)
+			if _, err := in.Accept(); err == nil {
+				t.Fatal("accepted")
+			} else if _, isSettings := err.(SettingsError); !isSettings {
+				t.Fatalf("want a SettingsError, got %T", err)
+			}
+		})
+	}
+}
+
+func TestAcceptedSettingsAreAlreadyEffective(t *testing.T) {
+	in := SettingsInput{
+		Store:      StoreInfo{Name: "  ร้านยา ก  ", Address: " 1 ถ.หลัก ", LicenseNo: " ขย. 1/2568 "},
+		Stock:      StockSettings{ReorderDays: 0, ReorderLookahead: 500, ExpiringDays: 30},
+		Pharmacist: PharmacistInfo{Name: " ภก. ข "},
+		Timezone:   " ",
+	}
+	got, err := in.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Store.Name != "ร้านยา ก" || got.Store.Address != "1 ถ.หลัก" || got.Store.LicenseNo != "ขย. 1/2568" || got.Pharmacist.Name != "ภก. ข" {
+		t.Fatalf("text not trimmed: %+v %+v", got.Store, got.Pharmacist)
+	}
+	if got.Stock.ReorderDays != DefaultReorderDays || got.Stock.ReorderLookahead != MaxReorderLookahead || got.Stock.ExpiringDays != 30 {
+		t.Fatalf("windows %+v", got.Stock)
+	}
+	if got.Timezone != DefaultTimezone || got.Receipt.PaperWidth != "58" {
+		t.Fatalf("timezone %q paper %q", got.Timezone, got.Receipt.PaperWidth)
+	}
+	if again := got.Effective(); again.Stock != got.Stock || again.Timezone != got.Timezone || again.Receipt != got.Receipt {
+		t.Fatal("an accepted edit changes when made effective")
+	}
+}
