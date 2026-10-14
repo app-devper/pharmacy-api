@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"pharmacy-pos/backend/db"
-	mw "pharmacy-pos/backend/middleware"
 	"pharmacy-pos/backend/reporting"
 	"pharmacy-pos/backend/sales"
 )
@@ -32,21 +31,9 @@ func intParam(r *http.Request, key string, def, max int) int {
 	return v
 }
 
-// report runs fn against the caller's tenant and writes its answer.
+// report serves one named report (reporting) for the caller's tenant.
 func (h *ReportHandler) report(w http.ResponseWriter, r *http.Request, timeout time.Duration, fn func(ctx context.Context, mdb *db.MongoDB) (any, error)) {
-	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
-	if err != nil {
-		jsonError(w, "unauthorized client", http.StatusForbidden)
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), timeout)
-	defer cancel()
-	out, err := fn(ctx, mdb)
-	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	jsonOK(w, out)
+	serve(h.dbm, w, r, timeout, fn)
 }
 
 func (h *ReportHandler) Summary(w http.ResponseWriter, r *http.Request) {
@@ -66,20 +53,10 @@ func (h *ReportHandler) Daily(w http.ResponseWriter, r *http.Request) {
 // Eod is the End-of-day view of ?date= (default today): live for an open
 // day, the close snapshot plus Late sale adjustments for a closed one.
 func (h *ReportHandler) Eod(w http.ResponseWriter, r *http.Request) {
-	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
-	if err != nil {
-		jsonError(w, "unauthorized client", http.StatusForbidden)
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-
-	day, err := sales.Day(ctx, mdb, r.URL.Query().Get("date"))
-	if err != nil {
-		writeCommandError(w, err)
-		return
-	}
-	jsonOK(w, day)
+	date := r.URL.Query().Get("date")
+	serve(h.dbm, w, r, 10*time.Second, func(ctx context.Context, mdb *db.MongoDB) (any, error) {
+		return sales.Day(ctx, mdb, date)
+	})
 }
 
 // CloseEod records the End-of-day close of a business day (ADR-0006).
@@ -92,21 +69,11 @@ func (h *ReportHandler) CloseEod(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
-	if err != nil {
-		jsonError(w, "unauthorized client", http.StatusForbidden)
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-	defer cancel()
-
-	closed, replayed, err := sales.Close(ctx, mdb, strings.TrimSpace(body.Date), strings.TrimSpace(body.ClosedByName))
-	if err != nil {
-		writeCommandError(w, err)
-		return
-	}
-	markReplayed(w, replayed)
-	jsonOK(w, closed)
+	serve(h.dbm, w, r, 15*time.Second, func(ctx context.Context, mdb *db.MongoDB) (any, error) {
+		closed, replayed, err := sales.Close(ctx, mdb, strings.TrimSpace(body.Date), strings.TrimSpace(body.ClosedByName))
+		markReplayed(w, replayed)
+		return closed, err
+	})
 }
 
 // Profit — GET /report/profit?from=YYYY-MM-DD&to=YYYY-MM-DD (to inclusive;

@@ -47,6 +47,7 @@ Keep this repository layout flat. Do not introduce a nested `app/features/...` a
 - Keep response shapes backward-compatible unless the user explicitly asks for a breaking API change.
 - Use `primitive.ObjectID` consistently for Mongo document identifiers and validate path/body IDs before DB operations.
 - Return JSON error responses in the style used by adjacent handlers rather than introducing a new error envelope.
+- New handlers run their work through `serve` (`handlers/serve.go`): it resolves the tenant (403 when unknown), applies the timeout, and renders the outcome the same way everywhere (a `refusal` maps to 400/404/409, anything else is 500). Older handlers still write the preamble by hand; move them to `serve` when you touch them.
 
 ## Domain Invariants
 - Every stock change goes through the `inventory` package (ADR-0007), which keeps `drug.stock = sum(lot.remaining) - sum(oversold_qty)` for lot-tracked drugs and writes the audit record. Never `$inc`/`$set` `drugs.stock` or lot `remaining` from a handler, and never delete a lot a sale has taken from (write it off).
