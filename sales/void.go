@@ -91,18 +91,8 @@ func Void(ctx context.Context, mdb *db.MongoDB, saleID, reason string) error {
 			}
 		}
 
-		// A bill already refunded in full leaves the customer's spend as is.
-		if remainingSpend := sale.Total - refunded; sale.CustomerID != nil && remainingSpend > 0 {
-			updateRes, err := mdb.Customers().UpdateOne(txCtx,
-				bson.M{"_id": sale.CustomerID},
-				bson.M{"$inc": bson.M{"total_spent": -remainingSpend}},
-			)
-			if err != nil {
-				return err
-			}
-			if updateRes.MatchedCount == 0 {
-				return mongo.ErrNoDocuments
-			}
+		if err := applyToCustomer(txCtx, mdb, sale.CustomerID, voidEffect(sale.Total, refunded)); err != nil {
+			return err
 		}
 
 		return recordDayEffect(txCtx, mdb, models.EodAdjustment{

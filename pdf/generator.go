@@ -2,6 +2,7 @@ package pdf
 
 import (
 	_ "embed"
+	"strings"
 
 	"github.com/jung-kurt/gofpdf/v2"
 )
@@ -12,11 +13,30 @@ var sarabunRegular []byte
 //go:embed assets/fonts/Sarabun-Bold.ttf
 var sarabunBold []byte
 
-const (
-	shopName    = "ร้านยา เฮลท์ตี้ฟาร์ม"
-	shopLicense = "ขย. 00000/2567"
-	shopAddress = "123 ถ.ชยางกูร ต.ในเมือง อ.เมือง จ.อุบลราชธานี 34000"
-)
+// Shop is the pharmacy a register belongs to, as printed at the top of
+// every page of its ขย. forms.
+type Shop struct {
+	Name      string
+	LicenseNo string
+	Address   string
+}
+
+// headerLines are the shop's two header lines: its name, then its licence
+// and address (whichever it has set).
+func (s Shop) headerLines() (name, details string) {
+	name = s.Name
+	if name == "" {
+		name = "ร้านยา"
+	}
+	var parts []string
+	if s.LicenseNo != "" {
+		parts = append(parts, "ใบอนุญาต "+s.LicenseNo)
+	}
+	if s.Address != "" {
+		parts = append(parts, s.Address)
+	}
+	return name, strings.Join(parts, "  |  ")
+}
 
 // NewDoc creates an A4 PDF with Thai font registered
 func NewDoc() *gofpdf.Fpdf {
@@ -27,21 +47,22 @@ func NewDoc() *gofpdf.Fpdf {
 	return pdf
 }
 
-// DrawHeader draws shop header and returns starting Y for content
-func DrawHeader(pdf *gofpdf.Fpdf, title, month string) float64 {
+// DrawHeader draws the shop header and returns the starting Y for content.
+func DrawHeader(pdf *gofpdf.Fpdf, shop Shop, title, month string) float64 {
 	pdf.AddPage()
 	w, _ := pdf.GetPageSize()
 	margins := 10.0
 
-	// Shop name
+	name, details := shop.headerLines()
 	pdf.SetFont("Sarabun", "B", 12)
 	pdf.SetXY(margins, 8)
-	pdf.CellFormat(w-margins*2, 7, shopName, "", 1, "C", false, 0, "")
+	pdf.CellFormat(w-margins*2, 7, name, "", 1, "C", false, 0, "")
 
-	// License + address
-	pdf.SetFont("Sarabun", "", 8)
-	pdf.SetX(margins)
-	pdf.CellFormat(w-margins*2, 5, shopLicense+"  |  "+shopAddress, "", 1, "C", false, 0, "")
+	if details != "" {
+		pdf.SetFont("Sarabun", "", 8)
+		pdf.SetX(margins)
+		pdf.CellFormat(w-margins*2, 5, details, "", 1, "C", false, 0, "")
+	}
 
 	// Form title
 	pdf.SetFont("Sarabun", "B", 10)
