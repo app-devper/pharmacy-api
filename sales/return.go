@@ -180,17 +180,8 @@ func recordReturn(ctx context.Context, mdb *db.MongoDB, oid bson.ObjectID, input
 		}
 		ret.ID = res.InsertedID.(bson.ObjectID)
 
-		if sale.CustomerID != nil {
-			updateRes, err := mdb.Customers().UpdateOne(txCtx,
-				bson.M{"_id": sale.CustomerID},
-				bson.M{"$inc": bson.M{"total_spent": -refund}},
-			)
-			if err != nil {
-				return err
-			}
-			if updateRes.MatchedCount == 0 {
-				return mongo.ErrNoDocuments
-			}
+		if err := applyToCustomer(txCtx, mdb, sale.CustomerID, returnEffect(refund)); err != nil {
+			return err
 		}
 
 		return recordDayEffect(txCtx, mdb, models.EodAdjustment{

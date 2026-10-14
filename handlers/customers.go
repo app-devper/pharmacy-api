@@ -16,6 +16,7 @@ import (
 	"pharmacy-pos/backend/db"
 	mw "pharmacy-pos/backend/middleware"
 	"pharmacy-pos/backend/models"
+	salesmod "pharmacy-pos/backend/sales"
 )
 
 type CustomerHandler struct{ dbm *db.Manager }
@@ -181,23 +182,10 @@ func (h *CustomerHandler) GetSales(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cur, err := mdb.Sales().Find(ctx,
-		bson.M{"customer_id": oid},
-		options.Find().SetSort(bson.D{{Key: "sold_at", Value: -1}}).SetLimit(100),
-	)
+	sales, err := salesmod.CustomerSales(ctx, mdb, oid, 100)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
-	}
-	defer cur.Close(ctx)
-
-	var sales []models.Sale
-	if err := cur.All(ctx, &sales); err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if sales == nil {
-		sales = []models.Sale{}
 	}
 	jsonOK(w, sales)
 }
