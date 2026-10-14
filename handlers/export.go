@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -12,22 +11,11 @@ import (
 	"pharmacy-pos/backend/compliance"
 	"pharmacy-pos/backend/db"
 	mw "pharmacy-pos/backend/middleware"
-	"pharmacy-pos/backend/models"
-	"pharmacy-pos/backend/pdf"
 )
 
 type ExportHandler struct{ dbm *db.Manager }
 
 func NewExportHandler(d *db.Manager) *ExportHandler { return &ExportHandler{dbm: d} }
-
-// printRegister reads a register oldest first, as it is printed, and renders it.
-func printRegister[T compliance.Row](ctx context.Context, mdb *db.MongoDB, month string, render func([]T, string) (*bytes.Buffer, error)) (*bytes.Buffer, error) {
-	rows, err := compliance.Month[T](ctx, mdb, month, compliance.OldestFirst)
-	if err != nil {
-		return nil, err
-	}
-	return render(rows, month)
-}
 
 // Export — GET /export/{form}?month=YYYY-MM: the register as a PDF.
 func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
@@ -46,17 +34,7 @@ func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
-	var b *bytes.Buffer
-	switch form {
-	case compliance.Ky9:
-		b, err = printRegister[models.Ky9](ctx, mdb, month, pdf.GenerateKy9)
-	case compliance.Ky10:
-		b, err = printRegister[models.Ky10](ctx, mdb, month, pdf.GenerateKy10)
-	case compliance.Ky11:
-		b, err = printRegister[models.Ky11](ctx, mdb, month, pdf.GenerateKy11)
-	case compliance.Ky12:
-		b, err = printRegister[models.Ky12](ctx, mdb, month, pdf.GenerateKy12)
-	}
+	b, err := compliance.Print(ctx, mdb, form, month)
 	if err != nil {
 		writeCommandError(w, err)
 		return

@@ -7,9 +7,9 @@ import (
 	"pharmacy-pos/backend/models"
 )
 
-func GenerateKy9(rows []models.Ky9, month string) (*bytes.Buffer, error) {
+func GenerateKy9(rows []models.Ky9, month string, shop Shop) (*bytes.Buffer, error) {
 	pdf := NewDoc()
-	DrawHeader(pdf, "ขย.9 บัญชีการซื้อยาและผลิตภัณฑ์สุขภาพ", month)
+	DrawHeader(pdf, shop, "ขย.9 บัญชีการซื้อยาและผลิตภัณฑ์สุขภาพ", month)
 
 	headers := []string{"#", "วันที่", "ชื่อยา", "ทะเบียนยา", "หน่วย", "จำนวน", "ราคา/หน่วย", "มูลค่า", "ผู้ขาย/บริษัท", "เลขใบส่งของ"}
 	widths := []float64{8, 18, 38, 20, 12, 14, 16, 20, 35, 22}
