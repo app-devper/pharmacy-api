@@ -125,20 +125,8 @@ func sell(ctx context.Context, mdb *db.MongoDB, input models.SaleInput, fp strin
 			}
 		}
 
-		if customerID != nil {
-			updateRes, err := mdb.Customers().UpdateOne(txCtx,
-				bson.M{"_id": customerID},
-				bson.M{
-					"$inc": bson.M{"total_spent": total},
-					"$set": bson.M{"last_visit": now},
-				},
-			)
-			if err != nil {
-				return err
-			}
-			if updateRes.MatchedCount == 0 {
-				return mongo.ErrNoDocuments
-			}
+		if err := applyToCustomer(txCtx, mdb, customerID, saleEffect(total, now)); err != nil {
+			return err
 		}
 
 		if err := recordKy(txCtx, mdb, ky, saleOID, now.Format(dayLayout), preparedItems, share); err != nil {
