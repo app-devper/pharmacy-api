@@ -40,6 +40,10 @@ func Sell(ctx context.Context, mdb *db.MongoDB, input models.SaleInput) (out mod
 	})
 }
 
+// sell refuses (a refusal from catalog or inventory, or a missing drug or
+// customer) only what would fail the same way on retry. Any other error, a
+// database outage or a deadline, stays an error, so the caller and a queued
+// offline sale treat it as temporary.
 func sell(ctx context.Context, mdb *db.MongoDB, input models.SaleInput, fp string) (models.SaleResponse, error) {
 	preparedItems, subtotal, err := prepareSaleItems(ctx, mdb, input.Items)
 	if err != nil {
@@ -49,7 +53,7 @@ func sell(ctx context.Context, mdb *db.MongoDB, input models.SaleInput, fp strin
 		case errors.Is(err, mongo.ErrNoDocuments):
 			return models.SaleResponse{}, invalid("drug not found")
 		}
-		return models.SaleResponse{}, invalid(err.Error())
+		return models.SaleResponse{}, err
 	}
 
 	customerID, customerName, err := resolveSaleCustomer(ctx, mdb, input.CustomerID)
@@ -57,7 +61,7 @@ func sell(ctx context.Context, mdb *db.MongoDB, input models.SaleInput, fp strin
 		if errors.Is(err, bson.ErrInvalidHex) || errors.Is(err, mongo.ErrNoDocuments) {
 			return models.SaleResponse{}, invalid("customer not found")
 		}
-		return models.SaleResponse{}, invalid(err.Error())
+		return models.SaleResponse{}, err
 	}
 
 	discount := math.Max(0, math.Min(input.Discount, subtotal))
