@@ -18,6 +18,8 @@ Sensitive reads include customer-identifying data, sale history and bill items, 
 
 [AGENTS.md](../AGENTS.md) describes live UM verification and the four-role permission split.
 
+Catalog: the [catalog module](../catalog/) owns what a drug is: a single create (opening stock needs a lot), an edit, and a bulk-import row (more permissive: stock is clamped and gets an OPENING lot) share one rule for identity (name required, type and base unit defaulted), alt units, price tiers, and report types, which must name a ขย. register (`ky9`–`ky12`; `KY10` and `ขย.10` are accepted, typos are refused so a register is never silently not required). Sales prices a line through `catalog.LinePrice`, so a drug sells by the rule it was saved with.
+
 Inventory: every stock change runs in the [inventory module](../inventory/) (ADR-0007), and its views (next lot, a drug's lots, expiring lots, low stock and the dashboard's stock summary) answer with the same sellable-lot and low-stock rules the commands use; `GET /inventory/drift` lists lot-tracked drugs whose stock and lots disagree.
 
 Reporting: the [reporting module](../reporting/) answers every named report (summary, daily, monthly, profit, top and slow drugs, reorder suggestions, dashboard) and the End-of-day close (ADR-0008): pharmacy timezone, end-exclusive periods, amounts as paid after the bill discount. Handlers only parse the query; callers pass the moment and the window, never dates.

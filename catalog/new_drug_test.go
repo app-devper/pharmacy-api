@@ -1,4 +1,4 @@
-package handlers
+package catalog
 
 import (
 	"testing"
@@ -7,9 +7,9 @@ import (
 	"pharmacy-pos/backend/models"
 )
 
-func TestBuildDrugCreatePayloadWithoutLotRejectsPositiveStock(t *testing.T) {
+func TestNewDrugWithoutLotRejectsPositiveStock(t *testing.T) {
 	now := time.Date(2026, 4, 18, 10, 0, 0, 0, time.Local)
-	_, _, err := buildDrugCreatePayload(models.DrugInput{
+	_, _, err := NewDrug(models.DrugInput{
 		Name:      "Paracetamol",
 		Stock:     12,
 		SellPrice: 20,
@@ -20,11 +20,11 @@ func TestBuildDrugCreatePayloadWithoutLotRejectsPositiveStock(t *testing.T) {
 	}
 }
 
-func TestBuildDrugCreatePayloadWithLotSetsStockFromLot(t *testing.T) {
+func TestNewDrugWithLotSetsStockFromLot(t *testing.T) {
 	now := time.Date(2026, 4, 18, 10, 0, 0, 0, time.Local)
 	cost := 8.5
 	sell := 15.0
-	drug, lot, err := buildDrugCreatePayload(models.DrugInput{
+	drug, lot, err := NewDrug(models.DrugInput{
 		Name:      "Amoxicillin",
 		Stock:     0,
 		SellPrice: 15,
@@ -61,9 +61,9 @@ func TestBuildDrugCreatePayloadWithLotSetsStockFromLot(t *testing.T) {
 	}
 }
 
-func TestBuildDrugCreatePayloadWithLotAllowsMatchingStock(t *testing.T) {
+func TestNewDrugWithLotAllowsMatchingStock(t *testing.T) {
 	now := time.Date(2026, 4, 18, 10, 0, 0, 0, time.Local)
-	drug, lot, err := buildDrugCreatePayload(models.DrugInput{
+	drug, lot, err := NewDrug(models.DrugInput{
 		Name:  "Ibuprofen",
 		Stock: 10,
 		CreateLot: &models.DrugLotInput{
@@ -83,9 +83,9 @@ func TestBuildDrugCreatePayloadWithLotAllowsMatchingStock(t *testing.T) {
 	}
 }
 
-func TestBuildDrugCreatePayloadWithLotRejectsMismatchedStock(t *testing.T) {
+func TestNewDrugWithLotRejectsMismatchedStock(t *testing.T) {
 	now := time.Date(2026, 4, 18, 10, 0, 0, 0, time.Local)
-	_, _, err := buildDrugCreatePayload(models.DrugInput{
+	_, _, err := NewDrug(models.DrugInput{
 		Name:  "Cetirizine",
 		Stock: 5,
 		CreateLot: &models.DrugLotInput{
@@ -103,9 +103,9 @@ func TestBuildDrugCreatePayloadWithLotRejectsMismatchedStock(t *testing.T) {
 	}
 }
 
-func TestBuildDrugCreatePayloadWithLotRejectsBadDates(t *testing.T) {
+func TestNewDrugWithLotRejectsBadDates(t *testing.T) {
 	now := time.Date(2026, 4, 18, 10, 0, 0, 0, time.Local)
-	_, _, err := buildDrugCreatePayload(models.DrugInput{
+	_, _, err := NewDrug(models.DrugInput{
 		Name: "Loratadine",
 		CreateLot: &models.DrugLotInput{
 			LotNumber:  "LOT-004",
@@ -117,7 +117,7 @@ func TestBuildDrugCreatePayloadWithLotRejectsBadDates(t *testing.T) {
 		t.Fatalf("expected expiry validation error, got %v", err)
 	}
 
-	_, _, err = buildDrugCreatePayload(models.DrugInput{
+	_, _, err = NewDrug(models.DrugInput{
 		Name: "Loratadine",
 		CreateLot: &models.DrugLotInput{
 			LotNumber:  "LOT-005",
