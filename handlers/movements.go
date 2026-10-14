@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -55,18 +54,8 @@ func (h *MovementsHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	limit := 50
-	offset := 0
-	if s := q.Get("limit"); s != "" {
-		if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 500 {
-			limit = n
-		}
-	}
-	if s := q.Get("offset"); s != "" {
-		if n, err := strconv.Atoi(s); err == nil && n >= 0 {
-			offset = n
-		}
-	}
+	limit := intParam(r, "limit", 50, 500)
+	offset := intParam(r, "offset", 0, 0)
 
 	all, err := inventory.Movements(ctx, d, query)
 	if err != nil {

@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"regexp"
-	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -28,11 +27,7 @@ func NewSaleHandler(d *db.Manager) *SaleHandler { return &SaleHandler{dbm: d} }
 func (h *SaleHandler) List(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
-	limitStr := q.Get("limit")
-	limit := int64(200)
-	if l, err := strconv.ParseInt(limitStr, 10, 64); err == nil && l > 0 {
-		limit = l
-	}
+	limit := int64(intParam(r, "limit", defaultHistoryLimit, maxHistoryLimit))
 
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
@@ -210,12 +205,9 @@ func (h *SaleHandler) Abandon(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, out)
 }
 
-// Abandoned lists abandonments, newest first (limit, default 200).
+// Abandoned lists abandonments, newest first (limit, default 200, at most 1000).
 func (h *SaleHandler) Abandoned(w http.ResponseWriter, r *http.Request) {
-	limit := int64(200)
-	if l, err := strconv.ParseInt(r.URL.Query().Get("limit"), 10, 64); err == nil && l > 0 {
-		limit = l
-	}
+	limit := int64(intParam(r, "limit", defaultHistoryLimit, maxHistoryLimit))
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
 		jsonError(w, "unauthorized client", http.StatusForbidden)
