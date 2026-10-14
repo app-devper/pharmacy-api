@@ -137,17 +137,7 @@ func (h *ImportHandler) withInput(w http.ResponseWriter, r *http.Request,
 		jsonError(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
-	if err != nil {
-		jsonError(w, "unauthorized client", http.StatusForbidden)
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-	po, err := run(ctx, mdb, input)
-	if err != nil {
-		writeCommandError(w, err)
-		return
-	}
-	jsonOK(w, po)
+	serve(h.dbm, w, r, 10*time.Second, func(ctx context.Context, mdb *db.MongoDB) (any, error) {
+		return run(ctx, mdb, input)
+	})
 }

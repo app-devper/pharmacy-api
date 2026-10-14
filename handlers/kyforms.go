@@ -11,7 +11,6 @@ import (
 
 	"pharmacy-pos/backend/compliance"
 	"pharmacy-pos/backend/db"
-	mw "pharmacy-pos/backend/middleware"
 	"pharmacy-pos/backend/models"
 )
 
@@ -24,19 +23,7 @@ func NewKyHandler(d *db.Manager) *KyHandler { return &KyHandler{dbm: d} }
 // ky runs fn against the caller's tenant and writes its answer; a refusal
 // maps to its status.
 func (h *KyHandler) ky(w http.ResponseWriter, r *http.Request, fn func(ctx context.Context, mdb *db.MongoDB) (any, error)) {
-	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
-	if err != nil {
-		jsonError(w, "unauthorized client", http.StatusForbidden)
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-	out, err := fn(ctx, mdb)
-	if err != nil {
-		writeCommandError(w, err)
-		return
-	}
-	jsonOK(w, out)
+	serve(h.dbm, w, r, 5*time.Second, fn)
 }
 
 // listKy serves GET /kyN?month=YYYY-MM, newest first.
