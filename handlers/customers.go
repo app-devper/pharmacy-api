@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -56,15 +55,9 @@ func (h *CustomerHandler) Add(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	if input.Name == "" {
-		jsonError(w, "name is required", http.StatusBadRequest)
-		return
-	}
-	if input.Disease == "" {
-		input.Disease = "-"
-	}
-	if !models.IsValidPriceTier(input.PriceTier) {
-		jsonError(w, "price_tier ต้องเป็นชื่อ tier ที่ไม่เกิน 32 ตัวอักษร หรือว่าง (= retail)", http.StatusBadRequest)
+	input, err := input.Accept()
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -78,7 +71,7 @@ func (h *CustomerHandler) Add(w http.ResponseWriter, r *http.Request) {
 
 	cust := models.Customer{
 		Name:      input.Name,
-		Phone:     strings.TrimSpace(input.Phone),
+		Phone:     input.Phone,
 		Disease:   input.Disease,
 		PriceTier: input.PriceTier,
 		CreatedAt: time.Now(),
@@ -110,15 +103,9 @@ func (h *CustomerHandler) Update(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	if input.Name == "" {
-		jsonError(w, "name is required", http.StatusBadRequest)
-		return
-	}
-	if input.Disease == "" {
-		input.Disease = "-"
-	}
-	if !models.IsValidPriceTier(input.PriceTier) {
-		jsonError(w, "price_tier ต้องเป็นชื่อ tier ที่ไม่เกิน 32 ตัวอักษร หรือว่าง (= retail)", http.StatusBadRequest)
+	input, err = input.Accept()
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -135,7 +122,7 @@ func (h *CustomerHandler) Update(w http.ResponseWriter, r *http.Request) {
 		bson.M{"_id": oid},
 		bson.M{"$set": bson.M{
 			"name":       input.Name,
-			"phone":      strings.TrimSpace(input.Phone),
+			"phone":      input.Phone,
 			"disease":    input.Disease,
 			"price_tier": input.PriceTier,
 		}},

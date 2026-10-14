@@ -64,8 +64,9 @@ func (h *SupplierHandler) Create(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	if input.Name == "" {
-		jsonError(w, "name is required", http.StatusBadRequest)
+	input, err := input.Accept()
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -113,8 +114,9 @@ func (h *SupplierHandler) Update(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	if input.Name == "" {
-		jsonError(w, "name is required", http.StatusBadRequest)
+	input, err = input.Accept()
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
