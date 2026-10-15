@@ -272,3 +272,20 @@ func TestVoidTwiceIsAConflictAndRestoresStockOnce(t *testing.T) {
 	}
 	wantKind(t, Void(s.ctx, s.mdb, bson.NewObjectID().Hex(), ""), NotFound)
 }
+
+func TestSellTreatsAnOutageAsAFailureNotARefusal(t *testing.T) {
+	s := newShop(t)
+	ctx, cancel := context.WithCancel(s.ctx)
+	cancel()
+	_, _, err := Sell(ctx, s.mdb, s.saleInput("", 1))
+	var e *Error
+	if err == nil || errors.As(err, &e) {
+		t.Fatalf("an outage must not be a refusal (it would never be retried), got %v", err)
+	}
+}
+
+func TestSellRefusesABadLineAsInvalid(t *testing.T) {
+	s := newShop(t)
+	_, _, err := Sell(s.ctx, s.mdb, s.saleInput("", 0))
+	wantKind(t, err, Invalid)
+}
