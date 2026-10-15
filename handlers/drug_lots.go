@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -84,10 +83,7 @@ func (h *DrugLotHandler) Expiring(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// Default window comes from tenant settings; `?days=N` overrides per-request.
-	days := loadStockSettings(ctx, mdb).ExpiringDays
-	if d, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil && d > 0 {
-		days = d
-	}
+	days := intParam(r, "days", loadStockSettings(ctx, mdb).ExpiringDays, models.MaxExpiringDays)
 
 	lots, err := inventory.Expiring(ctx, mdb, time.Now(), days, expiredOnly)
 	if err != nil {

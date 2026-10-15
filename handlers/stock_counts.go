@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -23,10 +22,7 @@ func NewStockCountHandler(d *db.Manager) *StockCountHandler {
 }
 
 func (h *StockCountHandler) List(w http.ResponseWriter, r *http.Request) {
-	limit := int64(20)
-	if v, err := strconv.ParseInt(r.URL.Query().Get("limit"), 10, 64); err == nil && v > 0 && v <= 100 {
-		limit = v
-	}
+	limit := int64(intParam(r, "limit", 20, 100))
 
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {

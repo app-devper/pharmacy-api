@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -19,5 +20,26 @@ func TestLocalDateKeepsTheStoredDayForUTCDecodedTimes(t *testing.T) {
 	}
 	if fromMongo.Format("2006-01-02") != "2026-09-26" {
 		t.Fatal("test premise: formatting the UTC time gives the previous day")
+	}
+}
+
+func TestIntParamCapsAHistoryLimit(t *testing.T) {
+	cases := []struct {
+		query string
+		want  int
+	}{
+		{"", defaultHistoryLimit},
+		{"?limit=50", 50},
+		{"?limit=0", defaultHistoryLimit},
+		{"?limit=-5", defaultHistoryLimit},
+		{"?limit=abc", defaultHistoryLimit},
+		{"?limit=1000000", defaultHistoryLimit},
+		{"?limit=1000", maxHistoryLimit},
+	}
+	for _, c := range cases {
+		r := httptest.NewRequest("GET", "/sales"+c.query, nil)
+		if got := intParam(r, "limit", defaultHistoryLimit, maxHistoryLimit); got != c.want {
+			t.Errorf("%q: got %d, want %d", c.query, got, c.want)
+		}
 	}
 }

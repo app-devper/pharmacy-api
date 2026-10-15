@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -20,16 +19,6 @@ import (
 type ReportHandler struct{ dbm *db.Manager }
 
 func NewReportHandler(d *db.Manager) *ReportHandler { return &ReportHandler{dbm: d} }
-
-// intParam is ?key= as a positive int, def when absent, malformed, not
-// positive, or above max (max 0 means no upper bound).
-func intParam(r *http.Request, key string, def, max int) int {
-	v, err := strconv.Atoi(r.URL.Query().Get(key))
-	if err != nil || v <= 0 || (max > 0 && v > max) {
-		return def
-	}
-	return v
-}
 
 // report serves one named report (reporting) for the caller's tenant.
 func (h *ReportHandler) report(w http.ResponseWriter, r *http.Request, timeout time.Duration, fn func(ctx context.Context, mdb *db.MongoDB) (any, error)) {
