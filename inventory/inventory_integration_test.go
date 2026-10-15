@@ -340,3 +340,15 @@ func TestDriftListsDrugsWhoseStockAndLotsDisagree(t *testing.T) {
 		t.Fatalf("drift %+v err=%v", rows, err)
 	}
 }
+
+func TestTakeRefusesAShortageFoundInsideTheSale(t *testing.T) {
+	s := newStore(t)
+	drugID := s.drug(0)
+	s.lot(drugID, "L1", 1, 6)
+	d, _ := loadDrug(s.ctx, s.mdb, drugID)
+	err := s.mdb.WithTransaction(s.ctx, func(txCtx context.Context) error {
+		_, err := Take(txCtx, s.mdb, d, 2, false)
+		return err
+	})
+	wantKind(t, err, refusal.Invalid)
+}
