@@ -26,8 +26,10 @@ func loadStockSettings(ctx context.Context, mdb *db.MongoDB) models.StockSetting
 	return mdb.StoreSettings(ctx).Stock
 }
 
-// Get returns the settings the shop runs on (db.StoreSettings): the built-in
-// defaults until the shop first saves. Reading never writes.
+// Get returns the settings the shop runs on (db.ReadSettings): the built-in
+// defaults until the shop first saves, and an error, never the defaults, when
+// the read fails, since this is what the settings form edits and saves back.
+// Reading never writes.
 // GET /api/pharmacy/v1/settings
 func (h *SettingsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
@@ -37,7 +39,8 @@ func (h *SettingsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	jsonOK(w, mdb.StoreSettings(ctx))
+	settings, err := mdb.ReadSettings(ctx)
+	render(w, settings, err)
 }
 
 // Update stores an edit as models.SettingsInput.Accept decides. ADMIN or SUPER only.
