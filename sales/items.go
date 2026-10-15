@@ -2,7 +2,6 @@ package sales
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -42,16 +41,16 @@ func prepareSaleItems(ctx context.Context, mdb *db.MongoDB, inputs []models.Sale
 
 	for _, input := range inputs {
 		if input.Qty <= 0 {
-			return nil, 0, fmt.Errorf("qty must be > 0")
+			return nil, 0, invalid("qty must be > 0")
 		}
 		if input.Price < 0 {
-			return nil, 0, fmt.Errorf("price must be >= 0")
+			return nil, 0, invalid("price must be >= 0")
 		}
 		if input.OriginalPrice < 0 {
-			return nil, 0, fmt.Errorf("original_price must be >= 0")
+			return nil, 0, invalid("original_price must be >= 0")
 		}
 		if input.ItemDiscount < 0 {
-			return nil, 0, fmt.Errorf("item_discount must be >= 0")
+			return nil, 0, invalid("item_discount must be >= 0")
 		}
 
 		drugID, err := bson.ObjectIDFromHex(input.DrugID)
