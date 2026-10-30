@@ -133,3 +133,11 @@ Prefer running the narrowest relevant test first, then broader tests if the chan
 - Do not allow stock-changing paths to skip lot, oversell, return, movement, or reconciliation rules.
 - Do not make `go test` depend on a real MongoDB instance. The identity smoke script (`scripts/identity-smoke/`) is the deliberate exception: it runs outside `go test` and is the cross-service smoke test the architecture notes call for.
 - Do not treat the checked-in `.env` or `pharmacy-server` binary as authoritative source files.
+
+## Agent skills
+
+The generic Claude Code / Codex skills (`coding-standards`, `tdd-workflow`,
+`grilling`, …) and the `ecc` rules are not in this repo. Every app-devper
+repo shares them from [app-devper/agent-skills](https://github.com/app-devper/agent-skills):
+clone it and run its `install.sh` once per machine. Only the skills about this
+repo live in `.claude/skills/`: `dev-flow`, `git-flow`, `pr`.
