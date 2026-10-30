@@ -10,6 +10,16 @@ exit check that must hold before moving on. Skip a stage only where it says
 so. Branching and PR mechanics are owned by `git-flow` and `pr`; this skill
 only sequences them.
 
+Skills named below live in two places. `.agents/skills/` in this repo holds
+the ones about this repo: `dev-flow`, `git-flow`, `pr`. The generic ones —
+`api-design`, `codebase-design`, `coding-standards`, `domain-modeling`,
+`error-handling`, `golang-patterns`, `golang-testing`, `grill-with-docs`,
+`grilling`, `improve-codebase-architecture`, `redis-patterns`,
+`security-review`, `tdd-workflow` — come from `app-devper/agent-skills`,
+linked into `~/.claude/skills` by its `install.sh`. If a generic skill is
+missing, clone that repo and run the script; never recreate one inside this
+repo, because a same-named copy would be shadowed.
+
 > **Repo note:** Tests that need Mongo read `MONGO_TEST_URI` and skip without it. Changes to `main.go`, `config/`, `middleware/`, `routes/` or `scripts/identity-smoke/` also run the `identity-smoke` workflow (um-api + pharmacy-api together, ADR-0004) — it must be green too.
 
 ## 0. Pick the track
@@ -25,7 +35,8 @@ only sequences them.
 ## 1. Shape — agree on what and why
 
 - New behaviour or unclear requirement → `/grill-with-docs` (runs `grilling`
-  + `domain-modeling`). The vocabulary is product-wide and lives in
+  + `domain-modeling`; the user starts it — when you drive the flow
+  yourself, load `grilling` and then `domain-modeling`). The vocabulary is product-wide and lives in
   **pharmacy-app-kmp** (`CONTEXT-MAP.md` → `docs/contexts/<context>/CONTEXT.md`);
   this repo's `CONTEXT-MAP.md` only lists which of those contexts the API
   implements. So: a new or changed term → PR to pharmacy-app-kmp; a
