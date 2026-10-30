@@ -3,11 +3,13 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
@@ -77,7 +79,11 @@ func (h *ImportHandler) GetOne(w http.ResponseWriter, r *http.Request) {
 
 	var po models.PurchaseOrder
 	if err := mdb.PurchaseOrders().FindOne(ctx, bson.M{"_id": oid}).Decode(&po); err != nil {
-		jsonError(w, "not found", http.StatusNotFound)
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			jsonError(w, "not found", http.StatusNotFound)
+			return
+		}
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	jsonOK(w, po)
@@ -137,17 +143,7 @@ func (h *ImportHandler) withInput(w http.ResponseWriter, r *http.Request,
 		jsonError(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
-	if err != nil {
-		jsonError(w, "unauthorized client", http.StatusForbidden)
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-	po, err := run(ctx, mdb, input)
-	if err != nil {
-		writeCommandError(w, err)
-		return
-	}
-	jsonOK(w, po)
+	serve(h.dbm, w, r, 10*time.Second, func(ctx context.Context, mdb *db.MongoDB) (any, error) {
+		return run(ctx, mdb, input)
+	})
 }

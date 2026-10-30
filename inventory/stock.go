@@ -26,9 +26,17 @@ import (
 	"pharmacy-pos/backend/refusal"
 )
 
-// sellable is the filter for lots a sale may take from, first expiry first.
+// sellableLots is the filter for lots a sale may take from, of any drug.
+func sellableLots() bson.M {
+	return bson.M{"remaining": bson.M{"$gt": 0}, "written_off_at": bson.M{"$exists": false}}
+}
+
+// sellable is the filter for the drug's lots a sale may take from, first
+// expiry first.
 func sellable(drugID bson.ObjectID) bson.M {
-	return bson.M{"drug_id": drugID, "remaining": bson.M{"$gt": 0}, "written_off_at": bson.M{"$exists": false}}
+	f := sellableLots()
+	f["drug_id"] = drugID
+	return f
 }
 
 var byExpiry = options.Find().SetSort(bson.D{{Key: "expiry_date", Value: 1}, {Key: "_id", Value: 1}})
@@ -52,7 +60,7 @@ func CheckAvailable(ctx context.Context, mdb *db.MongoDB, drugID bson.ObjectID, 
 		return err
 	}
 	if drug.Stock < need {
-		return fmt.Errorf("insufficient stock for %s", drug.Name)
+		return shortStock(drug)
 	}
 	var lots []models.DrugLot
 	cur, err := mdb.DrugLots().Find(ctx, sellable(drugID))
@@ -74,9 +82,20 @@ func CheckAvailable(ctx context.Context, mdb *db.MongoDB, drugID bson.ObjectID, 
 		}
 	}
 	if remaining < need {
-		return fmt.Errorf("insufficient lot inventory for %s", drug.Name)
+		return shortLots(drug)
 	}
 	return nil
+}
+
+// shortStock and shortLots refuse a sale the stock cannot cover. They are
+// refusals, not failures: the same request fails the same way on retry, so a
+// queued offline sale is refused instead of being retried forever.
+func shortStock(drug models.Drug) error {
+	return refusal.Invalidf(fmt.Sprintf("insufficient stock for %s", drug.Name))
+}
+
+func shortLots(drug models.Drug) error {
+	return refusal.Invalidf(fmt.Sprintf("insufficient lot inventory for %s", drug.Name))
 }
 
 // Taken is what a sale line took from stock.
@@ -100,7 +119,7 @@ func Take(txCtx context.Context, mdb *db.MongoDB, drug models.Drug, qty int, all
 		return Taken{}, err
 	}
 	if res.MatchedCount == 0 {
-		return Taken{}, fmt.Errorf("insufficient stock for %s", drug.Name)
+		return Taken{}, shortStock(drug)
 	}
 
 	cur, err := mdb.DrugLots().Find(txCtx, sellable(drug.ID), byExpiry)
@@ -119,7 +138,7 @@ func Take(txCtx context.Context, mdb *db.MongoDB, drug models.Drug, qty int, all
 		// A drug with no lots at all sells from stock alone; a lot-tracked
 		// drug with no sellable lot can only oversell.
 		if tracked && !allowOversell {
-			return Taken{}, fmt.Errorf("insufficient lot inventory for %s", drug.Name)
+			return Taken{}, shortLots(drug)
 		}
 		out := Taken{CostSubtotal: float64(qty) * drug.CostPrice}
 		if allowOversell {
@@ -143,7 +162,7 @@ func Take(txCtx context.Context, mdb *db.MongoDB, drug models.Drug, qty int, all
 			return Taken{}, err
 		}
 		if res.MatchedCount == 0 {
-			return Taken{}, fmt.Errorf("insufficient lot inventory for %s", drug.Name)
+			return Taken{}, shortLots(drug)
 		}
 		cost := drug.CostPrice
 		if lot.CostPrice != nil {
@@ -155,7 +174,7 @@ func Take(txCtx context.Context, mdb *db.MongoDB, drug models.Drug, qty int, all
 	}
 	if need > 0 {
 		if !allowOversell {
-			return Taken{}, fmt.Errorf("insufficient lot inventory for %s", drug.Name)
+			return Taken{}, shortLots(drug)
 		}
 		out.CostSubtotal += float64(need) * drug.CostPrice
 		out.Oversold = need

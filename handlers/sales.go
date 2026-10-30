@@ -7,13 +7,13 @@ import (
 	"io"
 	"net/http"
 	"regexp"
-	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	"pharmacy-pos/backend/calendar"
 	"pharmacy-pos/backend/db"
 	mw "pharmacy-pos/backend/middleware"
 	"pharmacy-pos/backend/models"
@@ -27,11 +27,7 @@ func NewSaleHandler(d *db.Manager) *SaleHandler { return &SaleHandler{dbm: d} }
 func (h *SaleHandler) List(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
-	limitStr := q.Get("limit")
-	limit := int64(200)
-	if l, err := strconv.ParseInt(limitStr, 10, 64); err == nil && l > 0 {
-		limit = l
-	}
+	limit := int64(intParam(r, "limit", defaultHistoryLimit, maxHistoryLimit))
 
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
@@ -44,20 +40,14 @@ func (h *SaleHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	filter := bson.M{}
 
-	// Date range filter
-	fromStr := q.Get("from")
-	toStr := q.Get("to")
-	if fromStr != "" || toStr != "" {
+	// Date range filter: inclusive dates in the pharmacy's calendar.
+	if from, to := calendar.Dates(tz, q.Get("from"), q.Get("to")); !from.IsZero() || !to.IsZero() {
 		dateFilter := bson.M{}
-		if fromStr != "" {
-			if t, err := time.ParseInLocation("2006-01-02", fromStr, tz); err == nil {
-				dateFilter["$gte"] = t
-			}
+		if !from.IsZero() {
+			dateFilter["$gte"] = from
 		}
-		if toStr != "" {
-			if t, err := time.ParseInLocation("2006-01-02", toStr, tz); err == nil {
-				dateFilter["$lt"] = t.Add(24 * time.Hour)
-			}
+		if !to.IsZero() {
+			dateFilter["$lt"] = to
 		}
 		filter["sold_at"] = dateFilter
 	}
@@ -215,12 +205,9 @@ func (h *SaleHandler) Abandon(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, out)
 }
 
-// Abandoned lists abandonments, newest first (limit, default 200).
+// Abandoned lists abandonments, newest first (limit, default 200, at most 1000).
 func (h *SaleHandler) Abandoned(w http.ResponseWriter, r *http.Request) {
-	limit := int64(200)
-	if l, err := strconv.ParseInt(r.URL.Query().Get("limit"), 10, 64); err == nil && l > 0 {
-		limit = l
-	}
+	limit := int64(intParam(r, "limit", defaultHistoryLimit, maxHistoryLimit))
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
 		jsonError(w, "unauthorized client", http.StatusForbidden)

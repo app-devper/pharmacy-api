@@ -2,14 +2,11 @@ package sales
 
 import (
 	"context"
-	"fmt"
-	"math"
 	"strings"
-	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
-	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	"pharmacy-pos/backend/catalog"
 	"pharmacy-pos/backend/db"
 	"pharmacy-pos/backend/inventory"
 	"pharmacy-pos/backend/models"
@@ -44,16 +41,16 @@ func prepareSaleItems(ctx context.Context, mdb *db.MongoDB, inputs []models.Sale
 
 	for _, input := range inputs {
 		if input.Qty <= 0 {
-			return nil, 0, fmt.Errorf("qty must be > 0")
+			return nil, 0, invalid("qty must be > 0")
 		}
 		if input.Price < 0 {
-			return nil, 0, fmt.Errorf("price must be >= 0")
+			return nil, 0, invalid("price must be >= 0")
 		}
 		if input.OriginalPrice < 0 {
-			return nil, 0, fmt.Errorf("original_price must be >= 0")
+			return nil, 0, invalid("original_price must be >= 0")
 		}
 		if input.ItemDiscount < 0 {
-			return nil, 0, fmt.Errorf("item_discount must be >= 0")
+			return nil, 0, invalid("item_discount must be >= 0")
 		}
 
 		drugID, err := bson.ObjectIDFromHex(input.DrugID)
@@ -66,50 +63,14 @@ func prepareSaleItems(ctx context.Context, mdb *db.MongoDB, inputs []models.Sale
 			return nil, 0, err
 		}
 
-		// Multi-unit: when the client ships a non-empty Unit, verify it matches an
-		// AltUnit on the drug and that the supplied Qty (which is ALWAYS in base
-		// units) is a multiple of the factor. UnitFactor = 0 or 1 = base unit.
+		// The authoritative price comes from the drug (catalog), not the
+		// client's claimed original_price: a client cannot claim the
+		// wholesale tier and send the retail amount.
 		unit := strings.TrimSpace(input.Unit)
-		factor := input.UnitFactor
-		var matchedAlt *models.AltUnit
-		if unit != "" {
-			for i := range drug.AltUnits {
-				if drug.AltUnits[i].Name == unit {
-					matchedAlt = &drug.AltUnits[i]
-					break
-				}
-			}
-			if matchedAlt == nil {
-				return nil, 0, fmt.Errorf("unit %q ไม่พบในยา %s", unit, drug.Name)
-			}
-			if factor == 0 {
-				factor = matchedAlt.Factor
-			} else if factor != matchedAlt.Factor {
-				return nil, 0, fmt.Errorf("unit_factor ไม่ตรงกับ alt_unit ของยา %s", drug.Name)
-			}
-			if input.Qty%factor != 0 {
-				return nil, 0, fmt.Errorf("qty (%d) ต้องหารด้วย factor (%d) ลงตัว สำหรับยา %s", input.Qty, factor, drug.Name)
-			}
-		} else {
-			factor = 1 // base unit
-		}
-
-		// Pricing tier: authoritative price comes from the drug document, not
-		// the client's claimed `original_price`. This closes the "client sets
-		// tier=wholesale but sends retail amount" loophole.
 		tier := strings.TrimSpace(input.PriceTier)
-		if !models.IsValidPriceTier(tier) {
-			return nil, 0, fmt.Errorf("price_tier ของยา %s ไม่ถูกต้อง", drug.Name)
-		}
-		var authoritativeOriginal float64
-		if matchedAlt != nil {
-			perAlt := models.ResolveTierPrice(matchedAlt.SellPrice, matchedAlt.Prices, tier)
-			// Round to 2 decimal places so fractional division (e.g. ฿100/3)
-			// doesn't leave long-tail floats on the SaleItem that later break
-			// reprint / receipt math.
-			authoritativeOriginal = math.Round(perAlt/float64(factor)*100) / 100
-		} else {
-			authoritativeOriginal = models.ResolveTierPrice(drug.SellPrice, drug.Prices, tier)
+		authoritativeOriginal, factor, err := catalog.LinePrice(drug, unit, input.UnitFactor, input.Qty, tier)
+		if err != nil {
+			return nil, 0, err
 		}
 
 		originalPrice := authoritativeOriginal
@@ -164,23 +125,6 @@ func resolveSaleCustomer(ctx context.Context, mdb *db.MongoDB, customerID *strin
 		return nil, "", err
 	}
 	return &oid, customer.Name, nil
-}
-
-func nextSaleBillNo(ctx context.Context, mdb *db.MongoDB, now time.Time) (string, error) {
-	today := now.Format("060102")
-	counterID := "INV-" + today
-	var counter struct {
-		Seq int `bson:"seq"`
-	}
-	err := mdb.Counters().FindOneAndUpdate(ctx,
-		bson.M{"_id": counterID},
-		bson.M{"$inc": bson.M{"seq": 1}},
-		options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.After),
-	).Decode(&counter)
-	if err != nil {
-		return "", fmt.Errorf("bill number error: %w", err)
-	}
-	return fmt.Sprintf("INV-%s-%03d", today, counter.Seq), nil
 }
 
 func applySaleItem(ctx context.Context, mdb *db.MongoDB, saleID bson.ObjectID, item preparedSaleItem) error {

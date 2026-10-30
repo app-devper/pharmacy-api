@@ -22,26 +22,12 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	"pharmacy-pos/backend/calendar"
 	"pharmacy-pos/backend/db"
 	"pharmacy-pos/backend/models"
 )
 
-const (
-	dayLayout   = "2006-01-02"
-	monthLayout = "2006-01"
-)
-
-// DayStart is midnight of t's calendar day in tz.
-func DayStart(t time.Time, tz *time.Location) time.Time {
-	t = t.In(tz)
-	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, tz)
-}
-
-// MonthStart is midnight of the first day of t's month in tz.
-func MonthStart(t time.Time, tz *time.Location) time.Time {
-	t = t.In(tz)
-	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, tz)
-}
+const monthLayout = "2006-01"
 
 func period(field string, from, to time.Time) bson.M {
 	f := bson.M{}
@@ -63,9 +49,9 @@ func confirmedSales(from, to time.Time) bson.M {
 	return m
 }
 
-// Line is one drug line of a sale (positive) or a return (negative), valued
+// line is one drug line of a sale (positive) or a return (negative), valued
 // at what the customer paid.
-type Line struct {
+type line struct {
 	DrugID   bson.ObjectID `bson:"drug_id"`
 	DrugName string        `bson:"drug_name"`
 	Qty      int           `bson:"qty"`
@@ -74,8 +60,8 @@ type Line struct {
 	At       time.Time     `bson:"at"`
 }
 
-// Lines loads every sale and return line in [from, to); a zero bound is open.
-func Lines(ctx context.Context, mdb *db.MongoDB, from, to time.Time) ([]Line, error) {
+// lines loads every sale and return line in [from, to); a zero bound is open.
+func lines(ctx context.Context, mdb *db.MongoDB, from, to time.Time) ([]line, error) {
 	// A bill's lines add up to total + discount; each line keeps its share of total.
 	paidShare := bson.M{"$cond": bson.A{
 		bson.M{"$gt": bson.A{bson.M{"$add": bson.A{"$total", "$discount"}}, 0}},
@@ -117,21 +103,21 @@ func Lines(ctx context.Context, mdb *db.MongoDB, from, to time.Time) ([]Line, er
 	return append(sales, returns...), nil
 }
 
-func aggregate(ctx context.Context, c *mongo.Collection, pipeline bson.A) ([]Line, error) {
+func aggregate(ctx context.Context, c *mongo.Collection, pipeline bson.A) ([]line, error) {
 	cur, err := c.Aggregate(ctx, pipeline)
 	if err != nil {
 		return nil, err
 	}
-	var out []Line
+	var out []line
 	err = cur.All(ctx, &out)
 	return out, err
 }
 
-// Daily totals lines by calendar day in tz, oldest first.
-func Daily(lines []Line, tz *time.Location) []models.DailyData {
+// daily totals lines by calendar day in tz, oldest first.
+func daily(lines []line, tz *time.Location) []models.DailyData {
 	totals := map[string]float64{}
 	for _, l := range lines {
-		totals[l.At.In(tz).Format(dayLayout)] += l.Revenue
+		totals[l.At.In(tz).Format(calendar.DayLayout)] += l.Revenue
 	}
 	keys := sortedKeys(totals)
 	out := make([]models.DailyData, 0, len(keys))
@@ -141,8 +127,8 @@ func Daily(lines []Line, tz *time.Location) []models.DailyData {
 	return out
 }
 
-// Monthly totals revenue, cost and profit by calendar month in tz.
-func Monthly(lines []Line, tz *time.Location) []models.MonthlyData {
+// monthly totals revenue, cost and profit by calendar month in tz.
+func monthly(lines []line, tz *time.Location) []models.MonthlyData {
 	byMonth := map[string]*models.MonthlyData{}
 	for _, l := range lines {
 		k := l.At.In(tz).Format(monthLayout)
@@ -166,21 +152,21 @@ func Monthly(lines []Line, tz *time.Location) []models.MonthlyData {
 	return out
 }
 
-// DrugTotals is a drug's net quantity, revenue and cost over some lines.
-type DrugTotals struct {
+// drugTotals is a drug's net quantity, revenue and cost over some lines.
+type drugTotals struct {
 	DrugName string
 	Qty      int
 	Revenue  float64
 	Cost     float64
 }
 
-// ByDrug totals lines per drug.
-func ByDrug(lines []Line) map[bson.ObjectID]*DrugTotals {
-	out := map[bson.ObjectID]*DrugTotals{}
+// byDrug totals lines per drug.
+func byDrug(lines []line) map[bson.ObjectID]*drugTotals {
+	out := map[bson.ObjectID]*drugTotals{}
 	for _, l := range lines {
 		t := out[l.DrugID]
 		if t == nil {
-			t = &DrugTotals{DrugName: l.DrugName}
+			t = &drugTotals{DrugName: l.DrugName}
 			out[l.DrugID] = t
 		}
 		t.Qty += l.Qty
@@ -199,8 +185,8 @@ func sortedKeys(m map[string]float64) []string {
 	return keys
 }
 
-// NetSales is confirmed bill totals less refunds over [from, to).
-func NetSales(ctx context.Context, mdb *db.MongoDB, from, to time.Time) (float64, error) {
+// netSales is confirmed bill totals less refunds over [from, to).
+func netSales(ctx context.Context, mdb *db.MongoDB, from, to time.Time) (float64, error) {
 	sales, err := sum(ctx, mdb.Sales(), confirmedSales(from, to), "$total")
 	if err != nil {
 		return 0, err
@@ -209,8 +195,8 @@ func NetSales(ctx context.Context, mdb *db.MongoDB, from, to time.Time) (float64
 	return sales - refunds, err
 }
 
-// Bills counts confirmed bills over [from, to).
-func Bills(ctx context.Context, mdb *db.MongoDB, from, to time.Time) (int, error) {
+// bills counts confirmed bills over [from, to).
+func bills(ctx context.Context, mdb *db.MongoDB, from, to time.Time) (int, error) {
 	n, err := mdb.Sales().CountDocuments(ctx, confirmedSales(from, to))
 	return int(n), err
 }
@@ -235,7 +221,7 @@ func sum(ctx context.Context, c *mongo.Collection, match bson.M, field string) (
 // Day is a business day's End-of-day report computed from its confirmed
 // bills and the refunds of returns made that day.
 func Day(ctx context.Context, mdb *db.MongoDB, day time.Time, tz *time.Location) (models.EodReport, error) {
-	start := DayStart(day, tz)
+	start := calendar.DayStart(day, tz)
 	end := start.AddDate(0, 0, 1)
 	cur, err := mdb.Sales().Find(ctx, confirmedSales(start, end), options.Find().SetSort(bson.D{{Key: "sold_at", Value: 1}}))
 	if err != nil {
@@ -257,7 +243,7 @@ func Day(ctx context.Context, mdb *db.MongoDB, day time.Time, tz *time.Location)
 		change += b.Change
 	}
 	return models.EodReport{
-		Date:          start.Format(dayLayout),
+		Date:          start.Format(calendar.DayLayout),
 		BillCount:     len(bills),
 		TotalSales:    sales - refunds,
 		TotalDiscount: discount,
@@ -266,38 +252,4 @@ func Day(ctx context.Context, mdb *db.MongoDB, day time.Time, tz *time.Location)
 		NetCash:       received - change - refunds,
 		Bills:         bills,
 	}, nil
-}
-
-// Stock summarises stock for the dashboard. A drug at or below zero is out
-// of stock (oversold drugs go negative); stock value counts only units on
-// hand.
-func Stock(ctx context.Context, mdb *db.MongoDB, lowThreshold int) (value float64, low, out int, err error) {
-	cur, err := mdb.Drugs().Aggregate(ctx, bson.A{
-		bson.M{"$group": bson.M{"_id": nil, "total": bson.M{"$sum": bson.M{"$multiply": bson.A{
-			"$cost_price", bson.M{"$max": bson.A{"$stock", 0}},
-		}}}}},
-	})
-	if err != nil {
-		return
-	}
-	var res []struct {
-		Total float64 `bson:"total"`
-	}
-	if err = cur.All(ctx, &res); err != nil {
-		return
-	}
-	if len(res) > 0 {
-		value = res[0].Total
-	}
-	lowN, err := mdb.Drugs().CountDocuments(ctx, bson.M{"$expr": bson.M{"$and": bson.A{
-		bson.M{"$gt": bson.A{"$stock", 0}},
-		bson.M{"$lte": bson.A{"$stock", bson.M{"$cond": bson.A{
-			bson.M{"$gt": bson.A{"$min_stock", 0}}, "$min_stock", lowThreshold,
-		}}}},
-	}}})
-	if err != nil {
-		return
-	}
-	outN, err := mdb.Drugs().CountDocuments(ctx, bson.M{"stock": bson.M{"$lte": 0}})
-	return value, int(lowN), int(outN), err
 }

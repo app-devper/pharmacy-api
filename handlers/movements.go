@@ -3,10 +3,10 @@ package handlers
 import (
 	"context"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
+	"pharmacy-pos/backend/calendar"
 	"pharmacy-pos/backend/db"
 	"pharmacy-pos/backend/inventory"
 	mw "pharmacy-pos/backend/middleware"
@@ -31,22 +31,21 @@ func (h *MovementsHandler) List(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	tz := d.Timezone(ctx)
 
-	now := time.Now().In(tz)
+	// Inclusive dates in the pharmacy's calendar; by default the last 30
+	// days and today, whole days.
+	today := calendar.DayStart(time.Now(), tz)
 	query := inventory.MovementQuery{
-		From:     now.AddDate(0, 0, -30),
-		To:       now.Add(24 * time.Hour),
+		From:     today.AddDate(0, 0, -30),
+		To:       today.AddDate(0, 0, 1),
 		Kinds:    inventory.AllMoves,
 		DrugName: strings.TrimSpace(q.Get("drug_name")),
 	}
-	if s := q.Get("from"); s != "" {
-		if t, err := time.ParseInLocation("2006-01-02", s, tz); err == nil {
-			query.From = t
-		}
+	from, to := calendar.Dates(tz, q.Get("from"), q.Get("to"))
+	if !from.IsZero() {
+		query.From = from
 	}
-	if s := q.Get("to"); s != "" {
-		if t, err := time.ParseInLocation("2006-01-02", s, tz); err == nil {
-			query.To = t.Add(24 * time.Hour)
-		}
+	if !to.IsZero() {
+		query.To = to
 	}
 	if tp := q.Get("types"); tp != "" {
 		query.Kinds = nil
@@ -55,18 +54,8 @@ func (h *MovementsHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	limit := 50
-	offset := 0
-	if s := q.Get("limit"); s != "" {
-		if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 500 {
-			limit = n
-		}
-	}
-	if s := q.Get("offset"); s != "" {
-		if n, err := strconv.Atoi(s); err == nil && n >= 0 {
-			offset = n
-		}
-	}
+	limit := intParam(r, "limit", 50, 500)
+	offset := intParam(r, "offset", 0, 0)
 
 	all, err := inventory.Movements(ctx, d, query)
 	if err != nil {
