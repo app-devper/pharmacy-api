@@ -5,7 +5,7 @@ import "math"
 
 const satangPerBaht = 100
 
-// satang rounds a baht amount half-up to two decimal places.
+// satang rounds a baht amount half away from zero to two decimal places.
 func satang(x float64) float64 {
 	return math.Round(x*satangPerBaht) / satangPerBaht
 }

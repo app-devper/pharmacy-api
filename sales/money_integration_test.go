@@ -1,7 +1,9 @@
 package sales
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 
@@ -102,5 +104,95 @@ func TestReturnRefundIsSettledToTheSatang(t *testing.T) {
 	}
 	if ret.Refund != 9.92 || ret.Items[0].Subtotal != 9.92 {
 		t.Fatalf("refund %v line subtotal %v, want 9.92 and 9.92", ret.Refund, ret.Items[0].Subtotal)
+	}
+}
+
+// addDrug stocks one more drug @ 10 with a single lot of 10 and returns its id.
+func (s *shop) addDrug(name string) bson.ObjectID {
+	s.t.Helper()
+	res, err := s.mdb.Drugs().InsertOne(s.ctx, models.Drug{Name: name, SellPrice: 10, CostPrice: 4, Stock: 10})
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	id := res.InsertedID.(bson.ObjectID)
+	if _, err := s.mdb.DrugLots().InsertOne(s.ctx, models.DrugLot{
+		DrugID: id, LotNumber: "L1", ExpiryDate: time.Now().AddDate(1, 0, 0), Quantity: 10, Remaining: 10,
+	}); err != nil {
+		s.t.Fatal(err)
+	}
+	return id
+}
+
+func TestFullReturnRefundsExactlyWhatWasPaid(t *testing.T) {
+	s := newShop(t)
+	drugs := []bson.ObjectID{s.drugID, s.addDrug("B"), s.addDrug("C")}
+	items := make([]models.SaleItemInput, 0, len(drugs))
+	for _, d := range drugs {
+		items = append(items, models.SaleItemInput{DrugID: d.Hex(), Qty: 1})
+	}
+	sale, _, err := Sell(s.ctx, s.mdb, models.SaleInput{Items: items, Discount: 0.01, Received: 100})
+	if err != nil {
+		t.Fatalf("sell refused: %v", err)
+	}
+	if sale.Total != 29.99 {
+		t.Fatalf("total %v, want 29.99", sale.Total)
+	}
+	oid, _ := bson.ObjectIDFromHex(sale.ID)
+	cur, err := s.mdb.SaleItems().Find(s.ctx, bson.M{"sale_id": oid})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []models.SaleItem
+	if err := cur.All(s.ctx, &lines); err != nil {
+		t.Fatal(err)
+	}
+	back := make([]models.ReturnItemInput, 0, len(lines))
+	for _, l := range lines {
+		back = append(back, models.ReturnItemInput{SaleItemID: l.ID.Hex(), Qty: 1})
+	}
+	ret, _, err := Return(s.ctx, s.mdb, sale.ID, models.DrugReturnInput{Reason: "r", Items: back})
+	if err != nil {
+		t.Fatalf("return refused: %v", err)
+	}
+	if ret.Refund != 29.99 {
+		t.Fatalf("refund %v, want 29.99", ret.Refund)
+	}
+}
+
+func TestRepeatedPartialReturnsNeverRefundMoreThanPaid(t *testing.T) {
+	s := newShop(t)
+	sale, _, err := Sell(s.ctx, s.mdb, models.SaleInput{
+		Items:    []models.SaleItemInput{{DrugID: s.drugID.Hex(), Qty: 6}},
+		Discount: 0.5,
+		Received: 100,
+	})
+	if err != nil {
+		t.Fatalf("sell refused: %v", err)
+	}
+	if sale.Total != 59.5 {
+		t.Fatalf("total %v, want 59.5", sale.Total)
+	}
+	itemID := s.saleItemID(sale.ID)
+	sum := 0.0
+	last := 0.0
+	for i := 0; i < 6; i++ {
+		ret, _, err := Return(s.ctx, s.mdb, sale.ID, models.DrugReturnInput{
+			ClientRequestID: fmt.Sprintf("req-part-%d", i),
+			Reason:          "r",
+			Items:           []models.ReturnItemInput{{SaleItemID: itemID, Qty: 1}},
+		})
+		if err != nil {
+			t.Fatalf("return %d refused: %v", i, err)
+		}
+		if i < 5 {
+			sum = satang(sum + ret.Refund)
+		}
+		last = ret.Refund
+	}
+	if want := satang(59.5 - sum); last != want {
+		t.Fatalf("last refund %v, want %v", last, want)
+	}
+	if total := satang(sum + last); total != 59.5 {
+		t.Fatalf("refunded %v in total, want 59.5", total)
 	}
 }
