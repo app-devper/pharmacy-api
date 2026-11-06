@@ -55,64 +55,35 @@ func Return(ctx context.Context, mdb *db.MongoDB, saleID string, input models.Dr
 func recordReturn(ctx context.Context, mdb *db.MongoDB, oid bson.ObjectID, input models.DrugReturnInput, requestFp string) (models.DrugReturn, error) {
 	tz := mdb.Timezone(ctx)
 
-	var sale models.Sale
-	if err := mdb.Sales().FindOne(ctx, bson.M{"_id": oid}).Decode(&sale); err != nil {
-		return models.DrugReturn{}, notFound("sale not found")
-	}
-	if sale.Voided {
-		return models.DrugReturn{}, invalid("ไม่สามารถคืนยาจากบิลที่ยกเลิกแล้ว")
-	}
-
-	itemCur, err := mdb.SaleItems().Find(ctx, bson.M{"sale_id": oid})
-	if err != nil {
-		return models.DrugReturn{}, err
-	}
-	defer itemCur.Close(ctx)
-	var saleItems []models.SaleItem
-	if err := itemCur.All(ctx, &saleItems); err != nil {
-		return models.DrugReturn{}, err
-	}
-
-	saleItemMap := make(map[string]models.SaleItem, len(saleItems))
-	for _, si := range saleItems {
-		saleItemMap[si.ID.Hex()] = si
-	}
-
-	for _, inp := range input.Items {
-		if _, ok := saleItemMap[inp.SaleItemID]; !ok {
-			return models.DrugReturn{}, invalid(fmt.Sprintf("sale item %s not found", inp.SaleItemID))
-		}
-		if inp.Qty <= 0 {
-			return models.DrugReturn{}, invalid("qty must be > 0")
-		}
-	}
-
 	var ret models.DrugReturn
 	if err := mdb.WithTransaction(ctx, func(txCtx context.Context) error {
-		currentReturned := make(map[string]int)
-		retCur, err := mdb.DrugReturns().Find(txCtx, bson.M{"sale_id": oid})
-		if err != nil {
-			return fmt.Errorf("failed to load existing returns: %w", err)
-		}
-		var txReturns []models.DrugReturn
-		if err := retCur.All(txCtx, &txReturns); err != nil {
-			retCur.Close(txCtx)
+		now := time.Now()
+		if err := claimSale(txCtx, mdb, oid, now); err != nil {
 			return err
 		}
-		retCur.Close(txCtx)
-		for _, ret := range txReturns {
-			for _, ri := range ret.Items {
-				currentReturned[ri.SaleItemID.Hex()] += ri.Qty
-			}
+		r, err := loadReversal(txCtx, mdb, oid)
+		if err != nil {
+			return err
 		}
+		sale := r.Sale
 
-		requested := map[string]int{}
+		requested := map[bson.ObjectID]int{}
+		lines := make([]models.SaleItem, 0, len(input.Items))
 		for _, inp := range input.Items {
-			requested[inp.SaleItemID] += inp.Qty
+			id, _ := bson.ObjectIDFromHex(inp.SaleItemID)
+			si, ok := r.line(id)
+			if !ok {
+				return invalid(fmt.Sprintf("sale item %s not found", inp.SaleItemID))
+			}
+			if inp.Qty <= 0 {
+				return invalid("qty must be > 0")
+			}
+			requested[id] += inp.Qty
+			lines = append(lines, si)
 		}
 		for id, qty := range requested {
-			si := saleItemMap[id]
-			line := Returnable(si, currentReturned[id])
+			si, _ := r.line(id)
+			line := Returnable(si, r.returnedOf(id))
 			if qty <= line.Returnable {
 				continue
 			}
@@ -122,7 +93,6 @@ func recordReturn(ctx context.Context, mdb *db.MongoDB, oid bson.ObjectID, input
 			return invalid(fmt.Sprintf("คืนเกินจำนวนที่ขาย: %s (ขายไป %d, คืนแล้ว %d)", si.DrugName, si.Qty, line.Returned))
 		}
 
-		now := time.Now()
 		// Numbered by the pharmacy's business day, like bills.
 		returnNo, err := mdb.NextDocNo(txCtx, "RET", now.In(tz))
 		if err != nil {
@@ -132,9 +102,8 @@ func recordReturn(ctx context.Context, mdb *db.MongoDB, oid bson.ObjectID, input
 		returnItems := make([]models.ReturnItem, 0, len(input.Items))
 		refund := 0.0
 
-		for _, inp := range input.Items {
-			si := saleItemMap[inp.SaleItemID]
-			siOID, _ := bson.ObjectIDFromHex(inp.SaleItemID)
+		for i, inp := range input.Items {
+			si := lines[i]
 
 			// The customer paid each line's share of the bill after its bill
 			// discount; a return refunds that share (ADR-0008).
@@ -146,7 +115,7 @@ func recordReturn(ctx context.Context, mdb *db.MongoDB, oid bson.ObjectID, input
 			refund += subtotal
 
 			returnItems = append(returnItems, models.ReturnItem{
-				SaleItemID:   siOID,
+				SaleItemID:   si.ID,
 				DrugID:       si.DrugID,
 				DrugName:     si.DrugName,
 				Qty:          inp.Qty,
@@ -155,7 +124,7 @@ func recordReturn(ctx context.Context, mdb *db.MongoDB, oid bson.ObjectID, input
 				CostSubtotal: costSubtotal,
 			})
 
-			if err := inventory.GiveBack(txCtx, mdb, si, inp.Qty, currentReturned[inp.SaleItemID]); err != nil {
+			if err := inventory.GiveBack(txCtx, mdb, si, inp.Qty, r.returnedOf(si.ID)); err != nil {
 				return err
 			}
 		}

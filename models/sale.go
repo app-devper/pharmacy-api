@@ -27,6 +27,9 @@ type Sale struct {
 	Voided     bool       `bson:"voided,omitempty"       json:"voided,omitempty"`
 	VoidReason string     `bson:"void_reason,omitempty"  json:"void_reason,omitempty"`
 	VoidedAt   *time.Time `bson:"voided_at,omitempty"    json:"voided_at,omitempty"`
+	// LastReversalAt is when a Return last claimed this Sale; the write makes
+	// a concurrent Void and Return of the same Sale conflict and serialize.
+	LastReversalAt *time.Time `bson:"last_reversal_at,omitempty" json:"-"`
 }
 
 // LotDeduction records one lot the FEFO engine pulled from when fulfilling a
