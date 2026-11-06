@@ -7,8 +7,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"go.mongodb.org/mongo-driver/v2/bson"
-	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"pharmacy-pos/backend/db"
 	mw "pharmacy-pos/backend/middleware"
@@ -49,13 +47,6 @@ func (h *ReturnHandler) Create(w http.ResponseWriter, r *http.Request) {
 // List returns all drug returns for a sale.
 // GET /api/pharmacy/v1/sales/{id}/returns
 func (h *ReturnHandler) List(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	oid, err := bson.ObjectIDFromHex(id)
-	if err != nil {
-		jsonError(w, "invalid id", http.StatusBadRequest)
-		return
-	}
-
 	mdb, err := h.dbm.ForClient(mw.GetClientID(r.Context()))
 	if err != nil {
 		jsonError(w, "unauthorized client", http.StatusForbidden)
@@ -64,23 +55,10 @@ func (h *ReturnHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	cur, err := mdb.DrugReturns().Find(ctx,
-		bson.M{"sale_id": oid},
-		options.Find().SetSort(bson.D{{Key: "returned_at", Value: -1}}),
-	)
+	returns, err := sales.Returns(ctx, mdb, chi.URLParam(r, "id"))
 	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
+		writeCommandError(w, err)
 		return
-	}
-	defer cur.Close(ctx)
-
-	var returns []models.DrugReturn
-	if err := cur.All(ctx, &returns); err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if returns == nil {
-		returns = []models.DrugReturn{}
 	}
 	jsonOK(w, returns)
 }
