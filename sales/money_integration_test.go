@@ -81,3 +81,26 @@ func TestReplayReturnsTheStoredRoundedAmounts(t *testing.T) {
 		t.Fatalf("replay total %v discount %v, first discount %v", again.Total, again.Discount, first.Discount)
 	}
 }
+
+func TestReturnRefundIsSettledToTheSatang(t *testing.T) {
+	s := newShop(t)
+	sale, _, err := Sell(s.ctx, s.mdb, models.SaleInput{
+		Items:    []models.SaleItemInput{{DrugID: s.drugID.Hex(), Qty: 6}},
+		Discount: 0.5,
+		Received: 100,
+	})
+	if err != nil {
+		t.Fatalf("sell refused: %v", err)
+	}
+	ret, _, err := Return(s.ctx, s.mdb, sale.ID, models.DrugReturnInput{
+		ClientRequestID: "req-refund-round",
+		Reason:          "r",
+		Items:           []models.ReturnItemInput{{SaleItemID: s.saleItemID(sale.ID), Qty: 1}},
+	})
+	if err != nil {
+		t.Fatalf("return refused: %v", err)
+	}
+	if ret.Refund != 9.92 || ret.Items[0].Subtotal != 9.92 {
+		t.Fatalf("refund %v line subtotal %v, want 9.92 and 9.92", ret.Refund, ret.Items[0].Subtotal)
+	}
+}

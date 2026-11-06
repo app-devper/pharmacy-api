@@ -110,7 +110,7 @@ func recordReturn(ctx context.Context, mdb *db.MongoDB, oid bson.ObjectID, input
 
 			// The customer paid each line's share of the bill after its bill
 			// discount; a return refunds that share (ADR-0008).
-			subtotal := float64(inp.Qty) * si.Price * paidShare(sale)
+			subtotal := satang(float64(inp.Qty) * si.Price * paidShare(sale))
 			costSubtotal := 0.0
 			if si.Qty > 0 {
 				costSubtotal = (si.CostSubtotal / float64(si.Qty)) * float64(inp.Qty)
@@ -131,6 +131,8 @@ func recordReturn(ctx context.Context, mdb *db.MongoDB, oid bson.ObjectID, input
 				return err
 			}
 		}
+
+		refund = satang(refund)
 
 		ret = models.DrugReturn{
 			ReturnNo:     returnNo,
