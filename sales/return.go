@@ -208,31 +208,13 @@ func Lines(ctx context.Context, mdb *db.MongoDB, saleID string) ([]models.SaleLi
 	if err != nil {
 		return nil, invalid("invalid id")
 	}
-	var items []models.SaleItem
-	cur, err := mdb.SaleItems().Find(ctx, bson.M{"sale_id": oid})
+	r, err := loadReversal(ctx, mdb, oid)
 	if err != nil {
 		return nil, err
 	}
-	if err := cur.All(ctx, &items); err != nil {
-		return nil, err
-	}
-	var returns []models.DrugReturn
-	cur, err = mdb.DrugReturns().Find(ctx, bson.M{"sale_id": oid})
-	if err != nil {
-		return nil, err
-	}
-	if err := cur.All(ctx, &returns); err != nil {
-		return nil, err
-	}
-	returned := map[bson.ObjectID]int{}
-	for _, r := range returns {
-		for _, ri := range r.Items {
-			returned[ri.SaleItemID] += ri.Qty
-		}
-	}
-	out := make([]models.SaleLine, 0, len(items))
-	for _, it := range items {
-		l := Returnable(it, returned[it.ID])
+	out := make([]models.SaleLine, 0, len(r.Items))
+	for _, it := range r.Items {
+		l := Returnable(it, r.returnedOf(it.ID))
 		out = append(out, models.SaleLine{SaleItem: it, ReturnedQty: l.Returned, ReturnableQty: l.Returnable, UnlinkedQty: l.Unlinked})
 	}
 	return out, nil
