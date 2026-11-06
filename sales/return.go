@@ -104,13 +104,15 @@ func recordReturn(ctx context.Context, mdb *db.MongoDB, oid bson.ObjectID, input
 
 		returnItems := make([]models.ReturnItem, 0, len(input.Items))
 		refund := 0.0
+		share := paidShare(sale)
 
 		for i, inp := range input.Items {
 			si := lines[i]
 
 			// The customer paid each line's share of the bill after its bill
-			// discount; a return refunds that share (ADR-0008).
-			subtotal := float64(inp.Qty) * si.Price * paidShare(sale)
+			// discount; a return refunds that share (ADR-0008), settled by the
+			// line's running total so its refunds never exceed what it paid.
+			subtotal := settledRefund(si.Price, r.returnedOf(si.ID), inp.Qty, share)
 			costSubtotal := 0.0
 			if si.Qty > 0 {
 				costSubtotal = (si.CostSubtotal / float64(si.Qty)) * float64(inp.Qty)
@@ -131,6 +133,9 @@ func recordReturn(ctx context.Context, mdb *db.MongoDB, oid bson.ObjectID, input
 				return err
 			}
 		}
+
+		// Never more than the Sale still has to give back.
+		refund = min(satang(refund), max(satang(sale.Total-r.Refunded), 0))
 
 		ret = models.DrugReturn{
 			ReturnNo:     returnNo,
@@ -170,6 +175,15 @@ func recordReturn(ctx context.Context, mdb *db.MongoDB, oid bson.ObjectID, input
 		return models.DrugReturn{}, err
 	}
 	return ret, nil
+}
+
+// settledRefund is the refund for qty more units of a line that has already
+// had returned units returned: the difference of two settled cumulative
+// amounts, so any sequence of returns adds up to the settled whole.
+func settledRefund(price float64, returned, qty int, share float64) float64 {
+	after := satang(float64(returned+qty) * price * share)
+	before := satang(float64(returned) * price * share)
+	return satang(after - before)
 }
 
 // paidShare is the fraction of each line's subtotal the customer paid once the
