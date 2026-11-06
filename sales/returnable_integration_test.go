@@ -96,3 +96,12 @@ func TestLinesOfAVoidedSaleStillReport(t *testing.T) {
 	}
 	t.Logf("observed voided line: returned=%d returnable=%d unlinked=%d", lines[0].ReturnedQty, lines[0].ReturnableQty, lines[0].UnlinkedQty)
 }
+
+// An unknown sale is not found (404), not an empty list; a malformed id is invalid.
+func TestLinesOfAnUnknownSaleIsNotFound(t *testing.T) {
+	s := newShop(t)
+	_, err := Lines(s.ctx, s.mdb, bson.NewObjectID().Hex())
+	wantKind(t, err, NotFound)
+	_, err = Lines(s.ctx, s.mdb, "not-hex")
+	wantKind(t, err, Invalid)
+}
