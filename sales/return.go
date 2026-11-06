@@ -70,7 +70,10 @@ func recordReturn(ctx context.Context, mdb *db.MongoDB, oid bson.ObjectID, input
 		requested := map[bson.ObjectID]int{}
 		lines := make([]models.SaleItem, 0, len(input.Items))
 		for _, inp := range input.Items {
-			id, _ := bson.ObjectIDFromHex(inp.SaleItemID)
+			id, idErr := bson.ObjectIDFromHex(inp.SaleItemID)
+			if idErr != nil {
+				return invalid(fmt.Sprintf("sale item %s not found", inp.SaleItemID))
+			}
 			si, ok := r.line(id)
 			if !ok {
 				return invalid(fmt.Sprintf("sale item %s not found", inp.SaleItemID))
