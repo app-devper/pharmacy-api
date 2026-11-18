@@ -48,50 +48,25 @@ func Void(ctx context.Context, mdb *db.MongoDB, saleID, reason string) error {
 			return errAlreadyVoided
 		}
 
-		itemCur, err := mdb.SaleItems().Find(txCtx, bson.M{"sale_id": oid})
+		r, err := loadReversal(txCtx, mdb, oid)
 		if err != nil {
 			return err
 		}
-		defer itemCur.Close(txCtx)
 
-		var items []models.SaleItem
-		if err := itemCur.All(txCtx, &items); err != nil {
-			return err
-		}
-
-		retCur, err := mdb.DrugReturns().Find(txCtx, bson.M{"sale_id": oid})
-		if err != nil {
-			return err
-		}
-		defer retCur.Close(txCtx)
-
-		var returns []models.DrugReturn
-		if err := retCur.All(txCtx, &returns); err != nil {
-			return err
-		}
-
-		returnedByItem := make(map[bson.ObjectID]int, len(items))
-		refunded := 0.0
-		for _, ret := range returns {
-			refunded += ret.Refund
-			for _, item := range ret.Items {
-				returnedByItem[item.SaleItemID] += item.Qty
-			}
-		}
-
-		for _, item := range items {
-			restoreQty := item.Qty - returnedByItem[item.ID]
+		for _, item := range r.Items {
+			returned := r.returnedOf(item.ID)
+			restoreQty := item.Qty - returned
 			if restoreQty <= 0 {
 				continue
 			}
 
 			// Goods come back to the lots they were taken from (inventory).
-			if err := inventory.GiveBack(txCtx, mdb, item, restoreQty, returnedByItem[item.ID]); err != nil {
+			if err := inventory.GiveBack(txCtx, mdb, item, restoreQty, returned); err != nil {
 				return err
 			}
 		}
 
-		if err := applyToCustomer(txCtx, mdb, sale.CustomerID, voidEffect(sale.Total, refunded)); err != nil {
+		if err := applyToCustomer(txCtx, mdb, sale.CustomerID, voidEffect(sale.Total, r.Refunded)); err != nil {
 			return err
 		}
 

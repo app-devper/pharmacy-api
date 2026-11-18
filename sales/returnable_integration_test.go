@@ -78,3 +78,30 @@ func TestALineOfADrugWithoutLotsCanBeReturned(t *testing.T) {
 		t.Fatalf("stock %d (%v), want 10", d.Stock, err)
 	}
 }
+
+// Reading a voided Sale's lines is never refused: the read path reports,
+// the write paths decide.
+func TestLinesOfAVoidedSaleStillReport(t *testing.T) {
+	s := newShop(t)
+	sale := s.sell("sale-1", 4)
+	if err := Void(s.ctx, s.mdb, sale.ID, "mistake"); err != nil {
+		t.Fatal(err)
+	}
+	lines, err := Lines(s.ctx, s.mdb, sale.ID)
+	if err != nil {
+		t.Fatalf("Lines refused a voided sale: %v", err)
+	}
+	if len(lines) != 1 || lines[0].ReturnedQty != 0 {
+		t.Fatalf("voided sale lines %+v", lines)
+	}
+	t.Logf("observed voided line: returned=%d returnable=%d unlinked=%d", lines[0].ReturnedQty, lines[0].ReturnableQty, lines[0].UnlinkedQty)
+}
+
+// An unknown sale is not found (404), not an empty list; a malformed id is invalid.
+func TestLinesOfAnUnknownSaleIsNotFound(t *testing.T) {
+	s := newShop(t)
+	_, err := Lines(s.ctx, s.mdb, bson.NewObjectID().Hex())
+	wantKind(t, err, NotFound)
+	_, err = Lines(s.ctx, s.mdb, "not-hex")
+	wantKind(t, err, Invalid)
+}

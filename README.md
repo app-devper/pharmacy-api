@@ -197,7 +197,7 @@ MONGO_URI=mongodb://127.0.0.1:27017 REDIS_ADDR=127.0.0.1:6379 \
 |--------|------|-----------|
 | `POST` | `/api/pharmacy/v1/sales` | บันทึกการขาย (FEFO deduction · รองรับ oversell) |
 | `GET` | `/api/pharmacy/v1/sales` | ประวัติการขาย |
-| `GET` | `/api/pharmacy/v1/sales/:id/items` | รายการสินค้าในใบขาย (แสดง lot_splits + oversold_qty) |
+| `GET` | `/api/pharmacy/v1/sales/:id/items` | รายการสินค้าในใบขาย (แสดง lot_splits + oversold_qty); ใบขายที่ไม่มีอยู่ตอบ 404 (เดิมตอบรายการว่าง) |
 | `GET` | `/api/pharmacy/v1/sales/:id/ky` | KY entries (ขย.10/11/12) ที่ถูกบันทึกพร้อมใบขายนี้ |
 | `POST` | `/api/pharmacy/v1/sales/:id/void` | ยกเลิกใบขาย |
 | `POST` | `/api/pharmacy/v1/sales/:id/return` | คืนสินค้า (เฉพาะส่วนที่ผูก real lot แล้ว) |

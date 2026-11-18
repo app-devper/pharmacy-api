@@ -64,16 +64,16 @@ func sell(ctx context.Context, mdb *db.MongoDB, input models.SaleInput, fp strin
 		return models.SaleResponse{}, err
 	}
 
-	discount := math.Max(0, math.Min(input.Discount, subtotal))
-	total := subtotal - discount
-	received := input.Received
+	discount := satang(math.Max(0, math.Min(input.Discount, subtotal)))
+	total := satang(subtotal - discount)
+	received := satang(input.Received)
 	if received == 0 {
 		received = total
 	}
 	if received < total {
 		return models.SaleResponse{}, invalid("received must be >= total")
 	}
-	change := math.Max(0, received-total)
+	change := satang(math.Max(0, received-total))
 	share := 1.0 // the part of each line's subtotal the customer paid
 	if subtotal > 0 {
 		share = total / subtotal

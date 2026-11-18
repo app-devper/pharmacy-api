@@ -79,7 +79,8 @@ func prepareSaleItems(ctx context.Context, mdb *db.MongoDB, inputs []models.Sale
 		if effectivePrice < 0 {
 			effectivePrice = 0
 		}
-		subtotal += effectivePrice * float64(input.Qty)
+		lineSubtotal := satang(effectivePrice * float64(input.Qty))
+		subtotal += lineSubtotal
 		// Oversold inputs skip the stock-availability aggregation — the apply
 		// step records any shortfall as OversoldQty instead of failing.
 		if !input.AllowOversell {
@@ -92,7 +93,7 @@ func prepareSaleItems(ctx context.Context, mdb *db.MongoDB, inputs []models.Sale
 			Price:         effectivePrice,
 			OriginalPrice: originalPrice,
 			ItemDiscount:  itemDiscount,
-			Subtotal:      effectivePrice * float64(input.Qty),
+			Subtotal:      lineSubtotal,
 			Unit:          unit,
 			UnitFactor:    factor,
 			PriceTier:     tier,
@@ -107,7 +108,7 @@ func prepareSaleItems(ctx context.Context, mdb *db.MongoDB, inputs []models.Sale
 		}
 	}
 
-	return items, subtotal, nil
+	return items, satang(subtotal), nil
 }
 
 func resolveSaleCustomer(ctx context.Context, mdb *db.MongoDB, customerID *string) (*bson.ObjectID, string, error) {
